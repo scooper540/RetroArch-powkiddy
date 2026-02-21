@@ -65,7 +65,7 @@ static midi_driver_t *midi_drv  = &midi_null;
 
 midi_driver_t *midi_drivers[]   = {
 #if defined(HAVE_ALSA) && !defined(HAVE_HAKCHI) && !defined(HAVE_SEGAM) && !defined(DINGUX)
-   &midi_alsa,
+   &midi_null,
 #endif
 #ifdef HAVE_WINMM
    &midi_winmm,

@@ -1,4 +1,4 @@
-compiler    := gcc
+compiler    := arm-buildroot-linux-uclibcgnueabihf-gcc
 extra_flags :=
 use_neon    := 0
 build       = release

@@ -1,17 +1,6 @@
 /*  RetroArch - A frontend for libretro.
- *  Copyright (C) 2010-2014 - Hans-Kristian Arntzen
- *  Copyright (C) 2011-2017 - Daniel De Matteis
- *
- *  RetroArch is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  RetroArch is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with RetroArch.
- *  If not, see <http://www.gnu.org/licenses/>.
+ *  Modified for Powkiddy X39 Pro - uses evdev (/dev/input/event*) instead of js*
+ *  This version reads raw input events to capture ALL buttons including non-standard ones
  */
 #include <stdint.h>
 #include <stdlib.h>
@@ -23,7 +12,7 @@
 
 #include <sys/types.h>
 #include <sys/inotify.h>
-#include <linux/joystick.h>
+#include <linux/input.h>
 
 #include <fcntl.h>
 #include <sys/epoll.h>
@@ -39,16 +28,66 @@
 #define NUM_BUTTONS 32
 #define NUM_AXES 32
 
+/* Powkiddy X39 Pro button mapping - customize based on your evtest results */
+#define EVDEV_BTN_A      158  /* BTN_SOUTH */
+#define EVDEV_BTN_B      139  /* BTN_EAST */
+#define EVDEV_BTN_X      308  /* BTN_NORTH */
+#define EVDEV_BTN_Y      352  /* BTN_WEST */
+#define EVDEV_BTN_L1     407  /* BTN_TL */
+#define EVDEV_BTN_R1     412  /* BTN_TR */
+#define EVDEV_BTN_L2     313  /* BTN_TL2 */
+#define EVDEV_BTN_R2     312  /* BTN_TR2 */
+#define EVDEV_BTN_SELECT 314  /* BTN_SELECT */
+#define EVDEV_BTN_START  315  /* BTN_START */
+#define EVDEV_BTN_MENU   174  /* BTN_THUMBL */
+#define EVDEV_BTN_VOLUP  115  /* BTN_THUMBR */
+#define EVDEV_BTN_VOLDOWN 114  /* BTN_THUMBR */
+#define EVDEV_BTN_ON 116  /* BTN_THUMBR */
+
+
+
+/* Map evdev button codes to RetroArch button indices (0-31) */
+static int evdev_to_retroarch_button(int evdev_code)
+{
+   switch (evdev_code)
+   {
+      case EVDEV_BTN_A:      return RETRO_DEVICE_ID_JOYPAD_A;  /* RetroPad B */
+      case EVDEV_BTN_B:      return RETRO_DEVICE_ID_JOYPAD_B;  /* RetroPad A */
+      case EVDEV_BTN_X:      return RETRO_DEVICE_ID_JOYPAD_X;  /* RetroPad Y */
+      case EVDEV_BTN_Y:      return RETRO_DEVICE_ID_JOYPAD_Y;  /* RetroPad X */
+      case EVDEV_BTN_L1:     return RETRO_DEVICE_ID_JOYPAD_L;  /* L1 */
+      case EVDEV_BTN_R1:     return RETRO_DEVICE_ID_JOYPAD_R;  /* R1 */
+      case EVDEV_BTN_L2:     return RETRO_DEVICE_ID_JOYPAD_L2;  /* L2 */
+      case EVDEV_BTN_R2:     return RETRO_DEVICE_ID_JOYPAD_R2;  /* R2 */
+      case EVDEV_BTN_SELECT: return RETRO_DEVICE_ID_JOYPAD_SELECT;  /* Select */
+      case EVDEV_BTN_START:  return RETRO_DEVICE_ID_JOYPAD_START;  /* Start */
+      case EVDEV_BTN_MENU: return 14;  /* Select */
+      case EVDEV_BTN_VOLUP:  return 11;  /* Start */
+      case EVDEV_BTN_VOLDOWN:  return 12;  /* Start */
+      case EVDEV_BTN_ON:  return 13;  /* Start */
+
+
+      /* Add more mappings as needed */
+      default:
+         RARCH_WARN("[EVDEV]: Unknown button code %d\n", evdev_code);
+         return -1;
+   }
+}
+
+
 struct linuxraw_joypad
 {
    int fd;
    uint32_t buttons;
    int16_t axes[NUM_AXES];
-
    char *ident;
+      
+   /* Axis calibration info */
+   int32_t axis_min[NUM_AXES];
+   int32_t axis_max[NUM_AXES];
+   int32_t axis_center[NUM_AXES];
 };
 
-/* TODO/FIXME - static globals */
 static struct linuxraw_joypad linuxraw_pads[MAX_USERS];
 static int linuxraw_epoll                              = 0;
 static int linuxraw_inotify                            = 0;
@@ -56,28 +95,87 @@ static bool linuxraw_hotplug                           = false;
 
 static void linuxraw_poll_pad(struct linuxraw_joypad *pad)
 {
-   struct js_event event;
+   struct input_event event;
 
    while (read(pad->fd, &event, sizeof(event)) == (ssize_t)sizeof(event))
    {
-      unsigned type = event.type & ~JS_EVENT_INIT;
-
-      switch (type)
+      /* Handle button events */
+      if (event.type == EV_KEY)
       {
-         case JS_EVENT_BUTTON:
-            if (event.number < NUM_BUTTONS)
+         int btn_idx = evdev_to_retroarch_button(event.code);
+         if (btn_idx >= 0 && btn_idx < NUM_BUTTONS)
+         {
+            if (event.value)
+               BIT32_SET(linuxraw_pads[0].buttons, btn_idx);
+            else
+               BIT32_CLEAR(linuxraw_pads[0].buttons, btn_idx);
+            
+            RARCH_LOG("[EVDEV]: Button %d (evdev code %d) = %d\n", 
+                  btn_idx, event.code, event.value);
+         }
+      }
+      /* Handle axis events */
+       /* Handle axis events */
+      else if (event.type == EV_ABS)
+      {
+         
+         if (event.code < NUM_AXES)
+         {
+            /* Get raw value */
+            int32_t val = event.value;
+            int32_t min = linuxraw_pads[0].axis_min[event.code];
+            int32_t max = linuxraw_pads[0].axis_max[event.code];
+            int32_t center = linuxraw_pads[0].axis_center[event.code];
+            //joystick reports between -128 to +128 center 0
+            //we scale to -0x7FFF to +0x7FFF
+            int16_t scaled = (int16_t)((val * 32767) / 128);
+            linuxraw_pads[0].axes[event.code] = scaled;
+            
+            /* Debug log */
+            static int16_t last_scaled[NUM_AXES] = {0};
+            if (abs(scaled - last_scaled[event.code]) > 5000)
             {
-               if (event.value)
-                  BIT32_SET(pad->buttons, event.number);
-               else
-                  BIT32_CLEAR(pad->buttons, event.number);
+               RARCH_LOG("[EVDEV]: Axis %d raw=%d (converted from unsigned) -> scaled=%d\n",
+                     event.code, val, scaled);
+               last_scaled[event.code] = scaled;
             }
-            break;
-
-         case JS_EVENT_AXIS:
-            if (event.number < NUM_AXES)
-               pad->axes[event.number] = event.value;
-            break;
+      
+  //
+  //          else
+  //          {
+  //             
+  //             /* Standard calibration-based scaling */
+  //             int16_t scaled;
+  //             
+  //             if (val < center)
+  //             {
+  //                /* Negative side */
+  //                if (center != min)
+  //                   scaled = (int16_t)(((int64_t)(val - center) * 32767) / (center - min));
+  //                else
+  //                   scaled = 0;
+  //             }
+  //             else
+  //             {
+  //                /* Positive side */
+  //                if (max != center)
+  //                   scaled = (int16_t)(((int64_t)(val - center) * 32767) / (max - center));
+  //                else
+  //                   scaled = 0;
+  //             }
+  //             
+  //             linuxraw_pads[0].axes[event.code] = scaled;
+  //             
+  //             /* Debug log */
+  //             static int16_t last_scaled_std[NUM_AXES] = {0};
+  //             if (abs(scaled - last_scaled_std[event.code]) > 5000)
+  //             {
+  //                RARCH_LOG("[EVDEV]: Axis %d raw=%d (min=%d center=%d max=%d) -> scaled=%d\n",
+  //                      event.code, val, min, center, max, scaled);
+  //                last_scaled_std[event.code] = scaled;
+  //             }
+  //          }
+         }
       }
    }
 }
@@ -85,8 +183,6 @@ static void linuxraw_poll_pad(struct linuxraw_joypad *pad)
 static bool linuxraw_joypad_init_pad(const char *path,
       struct linuxraw_joypad *pad)
 {
-   /* Device can have just been created, but not made accessible (yet).
-      IN_ATTRIB will signal when permissions change. */
    if (access(path, R_OK) < 0)
       return false;
    if (pad->fd >= 0)
@@ -98,15 +194,71 @@ static bool linuxraw_joypad_init_pad(const char *path,
    if (pad->fd >= 0)
    {
       struct epoll_event event;
+      char name[256] = {0};
 
-      ioctl(pad->fd,
-               JSIOCGNAME(input_config_get_device_name_size(0)), pad->ident);
-
+      /* Get device name using evdev ioctl */
+      if (ioctl(pad->fd, EVIOCGNAME(sizeof(name)), name) >= 0)
+      {
+         strlcpy(pad->ident, name, input_config_get_device_name_size(0));
+         RARCH_LOG("[EVDEV]: Opened %s (%s)\n", path, name);
+      }
+   
+      /* Read axis calibration info */
+    /* Read axis calibration info */
+      unsigned i;
+      for (i = 0; i < NUM_AXES; i++)
+      {
+         struct input_absinfo absinfo;
+         if (ioctl(pad->fd, EVIOCGABS(i), &absinfo) >= 0)
+         {
+            pad->axis_min[i] = absinfo.minimum;
+            pad->axis_max[i] = absinfo.maximum;
+            
+            /* Detect center based on range type:
+             * - 0-255 range: center is 0 (common on handhelds)
+             * - Symmetric range (-32768 to 32767): center is 0
+             * - Use flat (deadzone) if reported */
+            
+            if (absinfo.flat > 0)
+            {
+               pad->axis_center[i] = absinfo.flat;
+            }
+            else if (absinfo.minimum == 0 && absinfo.maximum == 255)
+            {
+               /* 0-255 joystick - center at 0, not 128! */
+               pad->axis_center[i] = 0;
+               RARCH_LOG("[EVDEV]: Axis %d: 0-255 range detected, center=0\n", i);
+            }
+            else
+            {
+               /* Standard symmetric range */
+               pad->axis_center[i] = (absinfo.minimum + absinfo.maximum) / 2;
+            }
+            
+            /* Log axis info */
+            if (absinfo.maximum > absinfo.minimum)
+            {
+               RARCH_LOG("[EVDEV]: Axis %d: min=%d max=%d center=%d flat=%d fuzz=%d\n",
+                     i, absinfo.minimum, absinfo.maximum, 
+                     pad->axis_center[i], absinfo.flat, absinfo.fuzz);
+            }
+         }
+         else
+         {
+            /* Default calibration if ioctl fails */
+            pad->axis_min[i] = 0;
+            pad->axis_max[i] = 255;
+            pad->axis_center[i] = 0;  /* Changed from 128 to 0! */
+         }
+      }
       event.events             = EPOLLIN;
       event.data.ptr           = pad;
 
       if (epoll_ctl(linuxraw_epoll, EPOLL_CTL_ADD, pad->fd, &event) >= 0)
          return true;
+      
+      close(pad->fd);
+      pad->fd = -1;
    }
 
    return false;
@@ -132,40 +284,38 @@ retry:
 
    for (i = 0; i < ret; i++)
    {
-      struct linuxraw_joypad *ptr = (struct linuxraw_joypad*)
-         events[i].data.ptr;
+      struct linuxraw_joypad *ptr = (struct linuxraw_joypad*)events[i].data.ptr;
 
       if (ptr)
          linuxraw_poll_pad(ptr);
       else
       {
-         /* handle plugged pad */
+         /* Handle hotplug events */
          int j, rc;
          size_t event_size  = sizeof(struct inotify_event) + NAME_MAX + 1;
          uint8_t *event_buf = (uint8_t*)calloc(1, event_size);
 
          while ((rc = read(linuxraw_inotify, event_buf, event_size)) >= 0)
          {
-            struct inotify_event *event = (struct inotify_event*)&event_buf[0];
+            struct inotify_event *ievent = (struct inotify_event*)&event_buf[0];
 
             event_buf[rc-1] = '\0';
 
-            /* Can read multiple events in one read() call. */
-
-            for (j = 0; j < rc; j += event->len + sizeof(struct inotify_event))
+            for (j = 0; j < rc; j += ievent->len + sizeof(struct inotify_event))
             {
                unsigned idx;
 
-               event = (struct inotify_event*)&event_buf[j];
+               ievent = (struct inotify_event*)&event_buf[j];
 
-               if (strstr(event->name, "js") != event->name)
+               /* Look for event* devices instead of js* */
+               if (strstr(ievent->name, "event") != ievent->name)
                   continue;
 
-               idx = strtoul(event->name + 2, NULL, 0);
+               idx = strtoul(ievent->name + 5, NULL, 0);
                if (idx >= MAX_USERS)
                   continue;
 
-               if (event->mask & IN_DELETE)
+               if (ievent->mask & IN_DELETE)
                {
                   if (linuxraw_pads[idx].fd >= 0)
                   {
@@ -189,15 +339,13 @@ retry:
                            0);
                   }
                }
-               /* Sometimes, device will be created before
-                * access to it is established. */
-               else if (event->mask & (IN_CREATE | IN_ATTRIB))
+               else if (ievent->mask & (IN_CREATE | IN_ATTRIB))
                {
                   char path[PATH_MAX_LENGTH];
 
                   path[0] = '\0';
 
-                  snprintf(path, sizeof(path), "/dev/input/%s", event->name);
+                  snprintf(path, sizeof(path), "/dev/input/%s", ievent->name);
 
                   if (     !string_is_empty(linuxraw_pads[idx].ident)
                         && linuxraw_joypad_init_pad(path, &linuxraw_pads[idx]))
@@ -237,7 +385,8 @@ static void *linuxraw_joypad_init(void *data)
       pad->fd                     = -1;
       pad->ident                  = input_config_get_device_name_ptr(i);
 
-      snprintf(path, sizeof(path), "/dev/input/js%u", i);
+      /* Try event devices instead of js devices */
+      snprintf(path, sizeof(path), "/dev/input/event%u", i);
 
       input_autoconfigure_connect(
             pad->ident,
@@ -263,7 +412,6 @@ static void *linuxraw_joypad_init(void *data)
       event.events             = EPOLLIN;
       event.data.ptr           = NULL;
 
-      /* Shouldn't happen, but just check it. */
       if (epoll_ctl(linuxraw_epoll, EPOLL_CTL_ADD, linuxraw_inotify, &event) < 0)
       {
          RARCH_ERR("Failed to add FD (%d) to epoll list (%s).\n",
@@ -332,7 +480,6 @@ static int16_t linuxraw_joypad_axis_state(
 {
    if (AXIS_NEG_GET(joyaxis) < NUM_AXES)
    {
-      /* Kernel returns values in range [-0x7fff, 0x7fff]. */
       int16_t val = pad->axes[AXIS_NEG_GET(joyaxis)];
       if (val < 0)
          return val;
@@ -349,8 +496,8 @@ static int16_t linuxraw_joypad_axis_state(
 static int16_t linuxraw_joypad_axis(unsigned port, uint32_t joyaxis)
 {
    const struct linuxraw_joypad *pad = (const struct linuxraw_joypad*)
-      &linuxraw_pads[port];
-   return linuxraw_joypad_axis_state(pad, port, joyaxis);
+      &linuxraw_pads[0];
+   return linuxraw_joypad_axis_state(pad, 0, joyaxis);
 }
 
 static int16_t linuxraw_joypad_state(
@@ -369,7 +516,6 @@ static int16_t linuxraw_joypad_state(
 
    for (i = 0; i < RARCH_FIRST_CUSTOM_BIND; i++)
    {
-      /* Auto-binds are per joypad, not per user. */
       const uint64_t joykey  = (binds[i].joykey != NO_BTN)
          ? binds[i].joykey  : joypad_info->auto_binds[i].joykey;
       const uint32_t joyaxis = (binds[i].joyaxis != AXIS_NONE)

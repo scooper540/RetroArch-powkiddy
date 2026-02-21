@@ -21,14 +21,11 @@ TARGET = retroarch
 endif
 
 OBJ :=
-LIBS := -lSDL
+LIBS :=
 DEF_FLAGS := -I.
 ASFLAGS :=
 DEFINES := -DHAVE_CONFIG_H -DRARCH_INTERNAL -D_FILE_OFFSET_BITS=64
 DEFINES += -DGLOBAL_CONFIG_DIR='"$(GLOBAL_CONFIG_DIR)"'
-
-LIBRARY_DIR += -L/home/chris/powkiddy/sysroot -L/home/chris/powkiddy/sysroot/lib -L/home/chris/powkiddy/sysroot/usr/lib -L/home/chris/powkiddy/sysroot/usr/local/lib -L/home/chris/powkiddy/sysroot/usr/include/sound
-
 
 OBJDIR_BASE := obj-unix
 

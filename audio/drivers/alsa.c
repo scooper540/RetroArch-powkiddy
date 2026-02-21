@@ -2,19 +2,12 @@
  *  Copyright (C) 2010-2014 - Hans-Kristian Arntzen
  *  Copyright (C) 2011-2017 - Daniel De Matteis
  *
- *  RetroArch is free software: you can redistribute it and/or modify it under the terms
- *  of the GNU General Public License as published by the Free Software Found-
- *  ation, either version 3 of the License, or (at your option) any later version.
- *
- *  RetroArch is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
- *  without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- *  PURPOSE.  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License along with RetroArch.
- *  If not, see <http://www.gnu.org/licenses/>.
+ *  Basé sur le driver ALSA original S16 qui fonctionne
+ *  Modifié pour : S32_LE + conversion float→S32 avec soft-clipping
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <lists/string_list.h>
 #include <string/stdstring.h>
@@ -23,6 +16,16 @@
 
 #include "../audio_driver.h"
 #include "../../verbosity.h"
+
+/* ============ CONFIGURATION ============ */
+#define FLOAT_TO_S32_GAIN_PERCENT 85
+#define FLOAT_TO_S32_SCALE ((int32_t)(0x7FFFFFFF * (FLOAT_TO_S32_GAIN_PERCENT / 100.0f)))
+#define SOFT_CLIP_THRESHOLD 0.95f
+
+/* Filtre passe-haut pour atténuer les basses */
+#define USE_BASS_FILTER 1
+#define BASS_FILTER_COEF 0.98f  /* Plus proche de 1.0 = coupe plus de basses (0.90-0.98) */
+/* ======================================= */
 
 typedef struct alsa
 {
@@ -33,6 +36,11 @@ typedef struct alsa
    bool has_float;
    bool can_pause;
    bool is_paused;
+   int32_t *conversion_buffer;
+   size_t conversion_buffer_size;
+   /* Filtre passe-haut (1 par canal) */
+   float hp_prev_in[2];
+   float hp_prev_out[2];
 } alsa_t;
 
 static bool alsa_use_float(void *data)
@@ -41,18 +49,34 @@ static bool alsa_use_float(void *data)
    return alsa->has_float;
 }
 
-static bool find_float_format(snd_pcm_t *pcm, void *data)
+static inline float soft_clip(float x)
 {
-   snd_pcm_hw_params_t *params = (snd_pcm_hw_params_t*)data;
-
-   if (snd_pcm_hw_params_test_format(pcm, params, SND_PCM_FORMAT_FLOAT) == 0)
+   if (x > 1.0f) return 1.0f;
+   if (x < -1.0f) return -1.0f;
+   
+   if (x > SOFT_CLIP_THRESHOLD || x < -SOFT_CLIP_THRESHOLD)
    {
-      RARCH_LOG("[ALSA]: Using floating point format.\n");
-      return true;
+      float threshold = SOFT_CLIP_THRESHOLD;
+      
+      if (x > threshold)
+         return threshold + (x - threshold) * 0.5f;
+      else
+         return -threshold + (x + threshold) * 0.5f;
    }
+   
+   return x;
+}
 
-   RARCH_LOG("[ALSA]: Using signed 16-bit format.\n");
-   return false;
+/* Filtre passe-haut simple (DC blocking + atténuation basses)
+ * y[n] = coef * (y[n-1] + x[n] - x[n-1])
+ * Plus coef proche de 1.0 = plus de basses coupées
+ */
+static inline float high_pass_filter(float input, float *prev_in, float *prev_out, float coef)
+{
+   float output = coef * (*prev_out + input - *prev_in);
+   *prev_in = input;
+   *prev_out = output;
+   return output;
 }
 
 static void *alsa_init(const char *device, unsigned rate, unsigned latency,
@@ -63,9 +87,7 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    snd_pcm_uframes_t buffer_size;
    snd_pcm_hw_params_t *params    = NULL;
    snd_pcm_sw_params_t *sw_params = NULL;
-   unsigned latency_usec          = latency * 1000;
    unsigned channels              = 2;
-   unsigned periods               = 4;
    unsigned orig_rate             = rate;
    const char *alsa_dev           = "default";
    alsa_t *alsa                   = (alsa_t*)calloc(1, sizeof(alsa_t));
@@ -76,8 +98,10 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    if (device)
       alsa_dev = device;
 
-   if (snd_pcm_open(
-            &alsa->pcm, alsa_dev, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) < 0)
+   RARCH_LOG("[ALSA S32]: Opening device: %s\n", alsa_dev);
+   RARCH_LOG("[ALSA S32]: Float→S32 gain: %d%%\n", FLOAT_TO_S32_GAIN_PERCENT);
+
+   if (snd_pcm_open(&alsa->pcm, alsa_dev, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) < 0)
       goto error;
 
    if (snd_pcm_hw_params_malloc(&params) < 0)
@@ -86,14 +110,14 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    if (snd_pcm_hw_params_any(alsa->pcm, params) < 0)
       goto error;
 
-   alsa->has_float = find_float_format(alsa->pcm, params);
-   format = alsa->has_float ? SND_PCM_FORMAT_FLOAT : SND_PCM_FORMAT_S16;
+   /* Force S32_LE - on accepte float en entrée */
+   alsa->has_float = true;
+   format = SND_PCM_FORMAT_S32_LE;
 
-   if (snd_pcm_hw_params_set_access(
-            alsa->pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED) < 0)
+   if (snd_pcm_hw_params_set_access(alsa->pcm, params, SND_PCM_ACCESS_RW_INTERLEAVED) < 0)
       goto error;
 
-   /* channels hardcoded to 2 for now */
+   /* S32 stereo = 64 bits per frame */
    alsa->frame_bits = snd_pcm_format_physical_width(format) * 2;
 
    if (snd_pcm_hw_params_set_format(alsa->pcm, params, format) < 0)
@@ -102,41 +126,48 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    if (snd_pcm_hw_params_set_channels(alsa->pcm, params, channels) < 0)
       goto error;
 
-   /* Don't allow rate resampling when probing for the default rate (but ignore if this call fails) */
-   snd_pcm_hw_params_set_rate_resample(alsa->pcm, params, 0 );
+   snd_pcm_hw_params_set_rate_resample(alsa->pcm, params, 0);
    if (snd_pcm_hw_params_set_rate_near(alsa->pcm, params, &rate, 0) < 0)
       goto error;
 
    if (rate != orig_rate)
       *new_rate = rate;
 
-   if (snd_pcm_hw_params_set_buffer_time_near(
-            alsa->pcm, params, &latency_usec, NULL) < 0)
+   /* Force buffer comme dans ton driver qui marche */
+   if (snd_pcm_hw_params_set_period_size(alsa->pcm, params, 1024, NULL) < 0)
       goto error;
-
-   if (snd_pcm_hw_params_set_periods_near(
-            alsa->pcm, params, &periods, NULL) < 0)
+   if (snd_pcm_hw_params_set_buffer_size(alsa->pcm, params, 4096) < 0)
       goto error;
 
    if (snd_pcm_hw_params(alsa->pcm, params) < 0)
       goto error;
 
-   /* Shouldn't have to bother with this,
-    * but some drivers are apparently broken. */
    if (snd_pcm_hw_params_get_period_size(params, &buffer_size, NULL))
       snd_pcm_hw_params_get_period_size_min(params, &buffer_size, NULL);
 
-   RARCH_LOG("[ALSA]: Period size: %d frames\n", (int)buffer_size);
+   RARCH_LOG("[ALSA S32]: Period size: %d frames\n", (int)buffer_size);
 
    if (snd_pcm_hw_params_get_buffer_size(params, &buffer_size))
       snd_pcm_hw_params_get_buffer_size_max(params, &buffer_size);
 
-   RARCH_LOG("[ALSA]: Buffer size: %d frames\n", (int)buffer_size);
+   RARCH_LOG("[ALSA S32]: Buffer size: %d frames\n", (int)buffer_size);
 
    alsa->buffer_size = snd_pcm_frames_to_bytes(alsa->pcm, buffer_size);
    alsa->can_pause = snd_pcm_hw_params_can_pause(params);
 
-   RARCH_LOG("[ALSA]: Can pause: %s.\n", alsa->can_pause ? "yes" : "no");
+   /* Alloue buffer conversion */
+   alsa->conversion_buffer_size = alsa->buffer_size * 2;
+   alsa->conversion_buffer = (int32_t*)calloc(1, alsa->conversion_buffer_size);
+   
+   if (!alsa->conversion_buffer)
+   {
+      RARCH_ERR("[ALSA S32]: Failed to allocate conversion buffer\n");
+      goto error;
+   }
+
+   /* Init filtre */
+   alsa->hp_prev_in[0] = alsa->hp_prev_in[1] = 0.0f;
+   alsa->hp_prev_out[0] = alsa->hp_prev_out[1] = 0.0f;
 
    if (snd_pcm_sw_params_malloc(&sw_params) < 0)
       goto error;
@@ -144,8 +175,7 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    if (snd_pcm_sw_params_current(alsa->pcm, sw_params) < 0)
       goto error;
 
-   if (snd_pcm_sw_params_set_start_threshold(
-            alsa->pcm, sw_params, buffer_size / 2) < 0)
+   if (snd_pcm_sw_params_set_start_threshold(alsa->pcm, sw_params, buffer_size / 2) < 0)
       goto error;
 
    if (snd_pcm_sw_params(alsa->pcm, sw_params) < 0)
@@ -154,24 +184,25 @@ static void *alsa_init(const char *device, unsigned rate, unsigned latency,
    snd_pcm_hw_params_free(params);
    snd_pcm_sw_params_free(sw_params);
 
+   RARCH_LOG("[ALSA S32]: Initialization successful\n");
+
    return alsa;
 
 error:
-   RARCH_ERR("[ALSA]: Failed to initialize...\n");
+   RARCH_ERR("[ALSA S32]: Failed to initialize\n");
    if (params)
       snd_pcm_hw_params_free(params);
-
    if (sw_params)
       snd_pcm_sw_params_free(sw_params);
-
    if (alsa)
    {
+      if (alsa->conversion_buffer)
+         free(alsa->conversion_buffer);
       if (alsa->pcm)
       {
          snd_pcm_close(alsa->pcm);
          snd_config_update_free_global();
       }
-
       free(alsa);
    }
    return NULL;
@@ -181,19 +212,64 @@ error:
 #define FRAMES_TO_BYTES(frames, frame_bits) ((frames) * frame_bits / 8)
 
 static bool alsa_start(void *data, bool is_shutdown);
+
 static ssize_t alsa_write(void *data, const void *buf_, size_t size_)
 {
    alsa_t *alsa              = (alsa_t*)data;
    const uint8_t *buf        = (const uint8_t*)buf_;
    snd_pcm_sframes_t written = 0;
    snd_pcm_sframes_t size    = BYTES_TO_FRAMES(size_, alsa->frame_bits);
-   size_t frames_size        = alsa->has_float ? sizeof(float) : sizeof(int16_t);
+   size_t frames_size        = sizeof(int32_t); /* S32 */
 
-   /* Workaround buggy menu code.
-    * If a write happens while we're paused, we might never progress. */
    if (alsa->is_paused)
       if (!alsa_start(alsa, false))
          return -1;
+
+   /* Conversion FLOAT → S32 */
+   if (alsa->has_float)
+   {
+      size_t samples = size_ / sizeof(float);
+      const float *buf_float = (const float*)buf_;
+      size_t i;
+
+      if (samples * 4 > alsa->conversion_buffer_size)
+         return -1;
+
+      for (i = 0; i < samples; i++)
+      {
+         float sample = buf_float[i];
+         
+#if USE_BASS_FILTER
+         /* Applique filtre passe-haut (stéréo: i%2 = canal) */
+         int channel = i & 1;
+         sample = high_pass_filter(sample, 
+                                   &alsa->hp_prev_in[channel],
+                                   &alsa->hp_prev_out[channel],
+                                   BASS_FILTER_COEF);
+#endif
+         
+         /* Soft-clip */
+         sample = soft_clip(sample);
+         
+         /* Convertis en S32 */
+         alsa->conversion_buffer[i] = (int32_t)(sample * (float)FLOAT_TO_S32_SCALE);
+      }
+
+      buf = (const uint8_t*)alsa->conversion_buffer;
+      size_ = samples * 4;
+      size = BYTES_TO_FRAMES(size_, alsa->frame_bits);
+
+      static bool logged = false;
+      if (!logged)
+      {
+         RARCH_LOG("[ALSA S32]: Float→S32 active, gain=%d%%", FLOAT_TO_S32_GAIN_PERCENT);
+#if USE_BASS_FILTER
+         RARCH_LOG(", bass filter=%.2f", BASS_FILTER_COEF);
+#endif
+         RARCH_LOG("\n");
+         logged = true;
+      }
+   }
 
    if (alsa->nonblock)
    {
@@ -205,7 +281,6 @@ static ssize_t alsa_write(void *data, const void *buf_, size_t size_)
          {
             if (snd_pcm_recover(alsa->pcm, frames, 1) < 0)
                return -1;
-
             break;
          }
          else if (frames == -EAGAIN)
@@ -220,7 +295,7 @@ static ssize_t alsa_write(void *data, const void *buf_, size_t size_)
    }
    else
    {
-      bool eagain_retry         = true;
+      bool eagain_retry = true;
 
       while (size)
       {
@@ -240,12 +315,10 @@ static ssize_t alsa_write(void *data, const void *buf_, size_t size_)
          {
             if (snd_pcm_recover(alsa->pcm, frames, 1) < 0)
                return -1;
-
             break;
          }
          else if (frames == -EAGAIN)
          {
-            /* Definitely not supposed to happen. */
             if (eagain_retry)
             {
                eagain_retry = false;
@@ -277,19 +350,15 @@ static bool alsa_stop(void *data)
 {
    alsa_t *alsa = (alsa_t*)data;
    if (alsa->is_paused)
-	  return true;
+      return true;
 
-   if (alsa->can_pause
-         && !alsa->is_paused)
+   if (alsa->can_pause && !alsa->is_paused)
    {
       int ret = snd_pcm_pause(alsa->pcm, 1);
-
       if (ret < 0)
          return false;
-
       alsa->is_paused = true;
    }
-
    return true;
 }
 
@@ -303,20 +372,16 @@ static bool alsa_start(void *data, bool is_shutdown)
 {
    alsa_t *alsa = (alsa_t*)data;
    if (!alsa->is_paused)
-	  return true;
+      return true;
 
-   if (alsa->can_pause
-         && alsa->is_paused)
+   if (alsa->can_pause && alsa->is_paused)
    {
       int ret = snd_pcm_pause(alsa->pcm, 0);
-
       if (ret < 0)
       {
-         RARCH_ERR("[ALSA]: Failed to unpause: %s.\n",
-               snd_strerror(ret));
+         RARCH_ERR("[ALSA S32]: Failed to unpause\n");
          return false;
       }
-
       alsa->is_paused = false;
    }
    return true;
@@ -328,13 +393,15 @@ static void alsa_free(void *data)
 
    if (alsa)
    {
+      if (alsa->conversion_buffer)
+         free(alsa->conversion_buffer);
+      
       if (alsa->pcm)
       {
          snd_pcm_drop(alsa->pcm);
          snd_pcm_close(alsa->pcm);
          snd_config_update_free_global();
       }
-
       free(alsa);
    }
 }
@@ -370,16 +437,13 @@ static void *alsa_device_list_new(void *data)
    if (snd_device_name_hint(-1, "pcm", &hints) != 0)
       goto error;
 
-   n      = hints;
+   n = hints;
 
    while (*n)
    {
       char *name = snd_device_name_get_hint(*n, "NAME");
       char *io   = snd_device_name_get_hint(*n, "IOID");
       char *desc = snd_device_name_get_hint(*n, "DESC");
-
-      /* description of device IOID - input / output identifcation
-       * ("Input" or "Output"), NULL means both) */
 
       if (!io || (string_is_equal(io, "Output")))
          string_list_append(s, name, attr);
@@ -394,9 +458,7 @@ static void *alsa_device_list_new(void *data)
       n++;
    }
 
-   /* free hint buffer too */
    snd_device_name_free_hint(hints);
-
    return s;
 
 error:
