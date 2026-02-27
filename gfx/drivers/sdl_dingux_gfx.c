@@ -106,17 +106,17 @@ static void sdl_dingux_compute_out_rect(
 
    if (integer_scaling)
    {
-      /* Plus grand multiple entier tenant dans 480×854.
-       * sy = contrainte hauteur, sx = contrainte largeur, on prend le min.
-       * NES 256×240 → rot 240×256 : sy=3 sx=2 → s=2 → 480×512
-       * GBA 240×160 → rot 160×240 : sy=3 sx=3 → s=3 → 480×720
-       * GB  160×144 → rot 144×160 : sy=5 sx=3 → s=3 → 432×480 */
-      unsigned sy = dst_h / rotated_h;
-      unsigned sx = dst_w / rotated_w;
-      unsigned s  = (sy < sx) ? sy : sx;
-      if (s < 1) s = 1;
-      ow = rotated_w * s;
-      oh = rotated_h * s;
+      /* Force oh = dst_w (480) = plein écran largeur landscape.
+       * ow calculé par ratio exact pour garder les proportions.
+       * Pixels légèrement rectangulaires acceptés pour maximiser la hauteur.
+       * NES 256×240 → rot 240×256 : oh=480, ow=240×480/256=450
+       * GBA 240×160 → rot 160×240 : oh=480, ow=160×480/240=320
+       * GB  160×144 → rot 144×160 : oh=480, ow=144×480/160=432
+       * SNES 256×224 → rot 224×256: oh=480, ow=224×480/256=420 */
+      ow = SDL_DINGUX_FB_WIDTH;                                  /* 480 = plein écran */
+      oh = rotated_w * dst_h / rotated_h;          /* ratio exact */
+      if (oh < 1) oh = 1;
+      if (oh > dst_h) oh = dst_h;                  /* clamp sécurité */
    }
    else if (keep_aspect)
    {
