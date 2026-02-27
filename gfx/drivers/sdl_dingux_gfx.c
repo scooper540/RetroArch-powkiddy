@@ -6,8 +6,13 @@
  *
  *  Modified for Powkiddy X39 Pro - 2026
  *
- *  ARCHITECTURE v3 — SDL 480x854 portrait direct, pure C scaler
+ *  ARCHITECTURE v4 — SDL 480x854 portrait direct, pure C scaler
  *  Rotation CW (+90°)
+ *
+ *  Fixes vs v3 :
+ *    - integer_scaling : max hauteur portrait → s = min(sy, sx)
+ *    - BICUBIC → bilinear (bicubic trop lent)
+ *    - last_msg jamais effacé (évite flickering OSD sur frames NULL)
  */
 
 #include <stdlib.h>
@@ -45,7 +50,6 @@
 #define SDL_DINGUX_FB_WIDTH   480
 #define SDL_DINGUX_FB_HEIGHT  854
 
-/* Logical landscape dimensions (what the game sees / scaler targets) */
 #define SDL_DINGUX_MENU_WIDTH  854
 #define SDL_DINGUX_MENU_HEIGHT 480
 
@@ -76,26 +80,17 @@ typedef struct sdl_dingux_video
    bool menu_active;
    bool was_in_menu;
    bool quitting;
-   /* Cache du dernier frame jeu pour les frames NULL (RetroArch dup) */
    uint16_t *last_frame_buf;
    size_t    last_frame_buf_size;
    unsigned  last_frame_width;
    unsigned  last_frame_height;
    unsigned  last_frame_pitch;
-   /* OSD: dernier message et frame où il a été dessiné, pour éviter le flickering */
    char      last_msg[512];
-   uint64_t  last_msg_frame;
 } sdl_dingux_video_t;
 
 /* ==========================================================================
  * Calcul du rectangle de destination
- *
- * 3 modes :
- *  - !keep_aspect && !integer_scaling  → stretch plein écran (854×480 logique)
- *  - integer_scaling (peu importe keep_aspect) → prend toute la hauteur
- *  - keep_aspect && !integer_scaling   → source native centrée (1:1, pas de scale)
- *
- * Rotation CW intégrée : src_w devient la hauteur portrait, src_h la largeur.
+ * Rotation CW : src_w → hauteur portrait, src_h → largeur portrait
  * ========================================================================== */
 static void sdl_dingux_compute_out_rect(
       unsigned src_w, unsigned src_h,
@@ -103,35 +98,33 @@ static void sdl_dingux_compute_out_rect(
       unsigned *out_x, unsigned *out_y,
       unsigned *out_w, unsigned *out_h)
 {
-   /* Après rotation CW : largeur portrait = src_h, hauteur portrait = src_w */
-   unsigned rotated_w = src_h;   /* largeur dans le fb portrait */
-   unsigned rotated_h = src_w;   /* hauteur dans le fb portrait */
-   unsigned dst_w     = SDL_DINGUX_FB_WIDTH;   /* 480 */
-   unsigned dst_h     = SDL_DINGUX_FB_HEIGHT;  /* 854 */
+   unsigned rotated_w = src_h;
+   unsigned rotated_h = src_w;
+   unsigned dst_w     = SDL_DINGUX_FB_WIDTH;
+   unsigned dst_h     = SDL_DINGUX_FB_HEIGHT;
    unsigned ow, oh;
 
    if (integer_scaling)
    {
-      /* Plus grand multiple entier qui tient dans dst */
-      float sx = dst_w / rotated_w;
-      float sy = dst_h / rotated_h;
-      unsigned s  = (sx < sy) ? sx : sy;
+      /* Plus grand multiple entier tenant dans 480×854.
+       * sy = contrainte hauteur, sx = contrainte largeur, on prend le min.
+       * NES 256×240 → rot 240×256 : sy=3 sx=2 → s=2 → 480×512
+       * GBA 240×160 → rot 160×240 : sy=3 sx=3 → s=3 → 480×720
+       * GB  160×144 → rot 144×160 : sy=5 sx=3 → s=3 → 432×480 */
+      unsigned sy = dst_h / rotated_h;
+      unsigned sx = dst_w / rotated_w;
+      unsigned s  = (sy < sx) ? sy : sx;
       if (s < 1) s = 1;
       ow = rotated_w * s;
       oh = rotated_h * s;
    }
    else if (keep_aspect)
    {
-      /* Source native 1:1, centrée — pas de scaling */
-      ow = rotated_w;
-      oh = rotated_h;
-      /* Clamp si la source est plus grande que l'écran */
-      if (ow > dst_w) ow = dst_w;
-      if (oh > dst_h) oh = dst_h;
+      ow = (rotated_w < dst_w) ? rotated_w : dst_w;
+      oh = (rotated_h < dst_h) ? rotated_h : dst_h;
    }
    else
    {
-      /* Stretch total */
       ow = dst_w;
       oh = dst_h;
    }
@@ -145,7 +138,6 @@ static void sdl_dingux_compute_out_rect(
 /* ==========================================================================
  * Helpers RGB565
  * ========================================================================== */
-
 static inline void rgb565_unpack(uint16_t c, int *r, int *g, int *b)
 {
    *r = ((c >> 11) & 0x1F) << 3;
@@ -171,37 +163,32 @@ static void scale_rotate_cw_nearest_16(
       unsigned out_x, unsigned out_y, unsigned out_w, unsigned out_h)
 {
    unsigned dx, dy;
-
    unsigned sx_lut[SDL_DINGUX_FB_HEIGHT];
    {
       unsigned step = ((unsigned long long)src_w << 16) / out_h;
-      unsigned fx   = (unsigned long long)(out_h - 1) * step;
-      for (dy = 0; dy < out_h; dy++, fx -= step)
+      unsigned fp   = (unsigned long long)(out_h - 1) * step;
+      for (dy = 0; dy < out_h; dy++, fp -= step)
       {
-         unsigned sx = fx >> 16;
+         unsigned sx = fp >> 16;
          if (sx >= src_w) sx = src_w - 1;
          sx_lut[dy] = sx;
       }
    }
-
    unsigned step_y = ((unsigned long long)src_h << 16) / out_w;
    unsigned fy     = 0;
-
    for (dx = 0; dx < out_w; dx++, fy += step_y)
    {
       unsigned sy = fy >> 16;
       if (sy >= src_h) sy = src_h - 1;
-
       const uint16_t *src_row = src + sy * src_stride;
       uint16_t       *dst_col = fb + out_y * fb_stride + (out_x + dx);
-
       for (dy = 0; dy < out_h; dy++)
          dst_col[dy * fb_stride] = src_row[sx_lut[dy]];
    }
 }
 
 /* ==========================================================================
- * Bilinear CW
+ * Bilinear 2D CW
  * ========================================================================== */
 static void scale_rotate_cw_bilinear_16(
       const uint16_t * __restrict__ src,
@@ -210,78 +197,64 @@ static void scale_rotate_cw_bilinear_16(
       unsigned out_x, unsigned out_y, unsigned out_w, unsigned out_h)
 {
    unsigned dx, dy;
-
    unsigned sx_fp_lut[SDL_DINGUX_FB_HEIGHT];
    {
       unsigned step = ((unsigned long long)src_w << 16) / out_h;
-      unsigned fx   = (unsigned long long)(out_h - 1) * step;
-      for (dy = 0; dy < out_h; dy++, fx -= step)
-         sx_fp_lut[dy] = fx;
+      unsigned fp   = (unsigned long long)(out_h - 1) * step;
+      for (dy = 0; dy < out_h; dy++, fp -= step)
+         sx_fp_lut[dy] = fp;
    }
-
    unsigned step_y = ((unsigned long long)src_h << 16) / out_w;
    unsigned fy_fp  = 0;
-
    for (dx = 0; dx < out_w; dx++, fy_fp += step_y)
    {
       unsigned sy0 = fy_fp >> 16;
       unsigned fy8 = (fy_fp >> 8) & 0xFF;
       if (sy0 >= src_h) sy0 = src_h - 1;
       unsigned sy1 = (sy0 + 1 < src_h) ? sy0 + 1 : sy0;
-
       const uint16_t *row0 = src + sy0 * src_stride;
       const uint16_t *row1 = src + sy1 * src_stride;
       uint16_t       *dst  = fb + out_y * fb_stride + (out_x + dx);
-
       for (dy = 0; dy < out_h; dy++)
       {
          unsigned sx_fp = sx_fp_lut[dy];
          unsigned sx0   = sx_fp >> 16;
          unsigned fx8   = (sx_fp >> 8) & 0xFF;
          if (sx0 >= src_w) sx0 = src_w - 1;
-         unsigned sx1   = (sx0 + 1 < src_w) ? sx0 + 1 : sx0;
-
-         int r00, g00, b00;  rgb565_unpack(row0[sx0], &r00, &g00, &b00);
-         int r10, g10, b10;  rgb565_unpack(row0[sx1], &r10, &g10, &b10);
-         int r01, g01, b01;  rgb565_unpack(row1[sx0], &r01, &g01, &b01);
-         int r11, g11, b11;  rgb565_unpack(row1[sx1], &r11, &g11, &b11);
-
-         int ifx = 255 - fx8;
-         int ify = 255 - fy8;
-
-         int r = (ifx * ify * r00 + fx8 * ify * r10 +
-                  ifx * fy8 * r01 + fx8 * fy8 * r11) >> 16;
-         int g = (ifx * ify * g00 + fx8 * ify * g10 +
-                  ifx * fy8 * g01 + fx8 * fy8 * g11) >> 16;
-         int b = (ifx * ify * b00 + fx8 * ify * b10 +
-                  ifx * fy8 * b01 + fx8 * fy8 * b11) >> 16;
-
+         unsigned sx1 = (sx0 + 1 < src_w) ? sx0 + 1 : sx0;
+         int r00, g00, b00; rgb565_unpack(row0[sx0], &r00, &g00, &b00);
+         int r10, g10, b10; rgb565_unpack(row0[sx1], &r10, &g10, &b10);
+         int r01, g01, b01; rgb565_unpack(row1[sx0], &r01, &g01, &b01);
+         int r11, g11, b11; rgb565_unpack(row1[sx1], &r11, &g11, &b11);
+         int ifx = 255 - fx8, ify = 255 - fy8;
+         int r = (ifx*ify*r00 + fx8*ify*r10 + ifx*fy8*r01 + fx8*fy8*r11) >> 16;
+         int g = (ifx*ify*g00 + fx8*ify*g10 + ifx*fy8*g01 + fx8*fy8*g11) >> 16;
+         int b = (ifx*ify*b00 + fx8*ify*b10 + ifx*fy8*b01 + fx8*fy8*b11) >> 16;
          dst[dy * fb_stride] = rgb565_pack(r, g, b);
       }
    }
 }
 
 /* ==========================================================================
- * Dispatcher nearest/bilinear
+ * Dispatcher + bandes noires à chaque frame
  * ========================================================================== */
 static void sdl_dingux_scale_rotate_cw_16(
       const uint16_t * __restrict__ src,
       unsigned src_w, unsigned src_h, unsigned src_stride,
-      uint16_t * __restrict__ fb,
-      unsigned fb_stride,
-      unsigned out_x, unsigned out_y,
-      unsigned out_w, unsigned out_h,
+      uint16_t * __restrict__ fb, unsigned fb_stride,
+      unsigned out_x, unsigned out_y, unsigned out_w, unsigned out_h,
       enum dingux_ipu_filter_type filter)
 {
    unsigned dy;
 
-   /* Bandes noires haut/bas */
+   /* Bandes noires effacées à chaque frame.
+    * Nécessaire : le scaler n'écrit que dans out_rect,
+    * les zones autour doivent être remises à zéro explicitement. */
    if (out_y > 0)
       memset(fb, 0, out_y * fb_stride * sizeof(uint16_t));
    if (out_y + out_h < SDL_DINGUX_FB_HEIGHT)
       memset(fb + (out_y + out_h) * fb_stride, 0,
              (SDL_DINGUX_FB_HEIGHT - out_y - out_h) * fb_stride * sizeof(uint16_t));
-   /* Bandes noires gauche/droite */
    if (out_x > 0 || out_x + out_w < SDL_DINGUX_FB_WIDTH)
    {
       for (dy = out_y; dy < out_y + out_h; dy++)
@@ -297,7 +270,7 @@ static void sdl_dingux_scale_rotate_cw_16(
 
    switch (filter)
    {
-      case DINGUX_IPU_FILTER_BICUBIC:   /* bicubic trop lent, fallback bilinear */
+      case DINGUX_IPU_FILTER_BICUBIC:  /* bicubic → bilinear */
       case DINGUX_IPU_FILTER_BILINEAR:
          scale_rotate_cw_bilinear_16(src, src_w, src_h, src_stride,
                fb, fb_stride, out_x, out_y, out_w, out_h);
@@ -313,15 +286,12 @@ static void sdl_dingux_scale_rotate_cw_16(
 static void sdl_dingux_scale_rotate_cw_32(
       const uint32_t * __restrict__ src,
       unsigned src_w, unsigned src_h, unsigned src_stride,
-      uint16_t * __restrict__ fb,
-      unsigned fb_stride,
-      unsigned out_x, unsigned out_y,
-      unsigned out_w, unsigned out_h,
+      uint16_t * __restrict__ fb, unsigned fb_stride,
+      unsigned out_x, unsigned out_y, unsigned out_w, unsigned out_h,
       enum dingux_ipu_filter_type filter)
 {
    (void)filter;
    unsigned dx, dy;
-
    if (out_y > 0)
       memset(fb, 0, out_y * fb_stride * sizeof(uint16_t));
    if (out_y + out_h < SDL_DINGUX_FB_HEIGHT)
@@ -339,28 +309,21 @@ static void sdl_dingux_scale_rotate_cw_32(
          sx_lut[dy] = sx;
       }
    }
-
    unsigned step_y = ((unsigned long long)src_h << 16) / out_w;
    unsigned fy     = 0;
-
    for (dx = 0; dx < out_w; dx++, fy += step_y)
    {
       unsigned sy = fy >> 16;
       if (sy >= src_h) sy = src_h - 1;
-
       const uint32_t *src_row = src + sy * src_stride;
       uint16_t       *dst_col = fb + out_y * fb_stride + (out_x + dx);
-
       for (dy = 0; dy < out_h; dy++)
       {
          uint32_t c = src_row[sx_lut[dy]];
          dst_col[dy * fb_stride] = (uint16_t)(
-               ((c >> 8) & 0xF800) |
-               ((c >> 5) & 0x07E0) |
-               ((c >> 3) & 0x001F));
+               ((c >> 8) & 0xF800) | ((c >> 5) & 0x07E0) | ((c >> 3) & 0x001F));
       }
    }
-
    if (out_x > 0 || out_x + out_w < SDL_DINGUX_FB_WIDTH)
    {
       for (dy = out_y; dy < out_y + out_h; dy++)
@@ -376,63 +339,23 @@ static void sdl_dingux_scale_rotate_cw_32(
 }
 
 /* ==========================================================================
- * Menu blit CW (1:1, pas de scaling)
- * ========================================================================== */
-static void sdl_dingux_blit_menu_cw(
-      const uint16_t * __restrict__ src,
-      unsigned menu_w, unsigned menu_h,
-      uint16_t * __restrict__ fb,
-      unsigned fb_stride)
-{
-   unsigned rot_w = menu_h;
-   unsigned rot_h = menu_w;
-   unsigned off_x = (SDL_DINGUX_FB_WIDTH  > rot_w) ? (SDL_DINGUX_FB_WIDTH  - rot_w) / 2 : 0;
-   unsigned off_y = (SDL_DINGUX_FB_HEIGHT > rot_h) ? (SDL_DINGUX_FB_HEIGHT - rot_h) / 2 : 0;
-   unsigned dx, dy;
-
-   memset(fb, 0, SDL_DINGUX_FB_WIDTH * SDL_DINGUX_FB_HEIGHT * sizeof(uint16_t));
-
-   for (dy = 0; dy < menu_h && dy < SDL_DINGUX_FB_WIDTH; dy++)
-   {
-      unsigned pdx = off_x + dy;
-      if (pdx >= SDL_DINGUX_FB_WIDTH) continue;
-
-      const uint16_t *src_row = src + dy * menu_w;
-      uint16_t       *dst_col = fb  + off_y * fb_stride + pdx;
-
-      for (dx = 0; dx < menu_w && dx < SDL_DINGUX_FB_HEIGHT; dx++)
-         dst_col[dx * fb_stride] = src_row[dx];
-   }
-}
-
-/* ==========================================================================
  * Font / OSD
  * ========================================================================== */
-
 static void sdl_dingux_init_font_color(sdl_dingux_video_t *vid)
 {
    settings_t *settings = config_get_ptr();
-   uint32_t red   = 0xFF, green = 0xFF, blue = 0xFF;
-
+   uint32_t red = 0xFF, green = 0xFF, blue = 0xFF;
    if (settings)
    {
       red   = (uint32_t)((settings->floats.video_msg_color_r * 255.0f) + 0.5f) & 0xFF;
       green = (uint32_t)((settings->floats.video_msg_color_g * 255.0f) + 0.5f) & 0xFF;
       blue  = (uint32_t)((settings->floats.video_msg_color_b * 255.0f) + 0.5f) & 0xFF;
    }
-
    vid->font_colour32 = (red << 16) | (green << 8) | blue;
    red >>= 3; green >>= 3; blue >>= 3;
    vid->font_colour16 = (uint16_t)((red << 11) | (green << 6) | blue);
 }
 
-/*
- * sdl_dingux_blit_text_cw
- *
- * Dessine le texte OSD dans le fb portrait 480x854,
- * dans l'espace de coordonnées paysage logique 854x480.
- * Transformation CW : pixel paysage (lx, ly) → portrait (ly, FB_H-1-lx)
- */
 static void sdl_dingux_blit_text_cw(sdl_dingux_video_t *vid,
       unsigned x, unsigned y, const char *str)
 {
@@ -440,27 +363,17 @@ static void sdl_dingux_blit_text_cw(sdl_dingux_video_t *vid,
    unsigned  fb_stride = vid->screen->pitch >> 1;
    bool    **font_lut  = vid->osd_font->lut;
    uint16_t  col       = vid->font_colour16;
-
-   const unsigned LS_W = SDL_DINGUX_MENU_WIDTH;
-   const unsigned LS_H = SDL_DINGUX_MENU_HEIGHT;
-
-   unsigned x_pos = x;
-   unsigned y_pos = y;
-
-   if (y_pos + FONT_HEIGHT + 1 >= LS_H)
-      return;
-
+   unsigned  x_pos     = x;
+   unsigned  y_pos     = y;
+   if (y_pos + FONT_HEIGHT + 1 >= SDL_DINGUX_MENU_HEIGHT) return;
    while (!string_is_empty(str))
    {
-      if (x_pos + FONT_WIDTH_STRIDE + 1 >= LS_W)
-         return;
+      if (x_pos + FONT_WIDTH_STRIDE + 1 >= SDL_DINGUX_MENU_WIDTH) return;
       if (*str == ' ') { str++; x_pos += FONT_WIDTH_STRIDE; continue; }
-
       uint32_t symbol = utf8_walk(&str);
       if (symbol == 339) symbol = 156;
       if (symbol == 338) symbol = 140;
       if (symbol >= SDL_DINGUX_NUM_FONT_GLYPHS) continue;
-
       bool *sym_lut = font_lut[symbol];
       unsigned i, j;
       for (j = 0; j < FONT_HEIGHT; j++)
@@ -468,16 +381,12 @@ static void sdl_dingux_blit_text_cw(sdl_dingux_video_t *vid,
          unsigned ly = y_pos + j;
          for (i = 0; i < FONT_WIDTH; i++)
          {
-            if (!sym_lut[i + j * FONT_WIDTH])
-               continue;
-            unsigned lx = x_pos + i;
-
-            /* Rotation CW → coords portrait */
-            unsigned fb_px = ly;
-            unsigned fb_py = SDL_DINGUX_FB_HEIGHT - 1 - lx;
-
-            if (fb_px < SDL_DINGUX_FB_WIDTH && fb_py < SDL_DINGUX_FB_HEIGHT)
-               fb[fb_py * fb_stride + fb_px] = col;
+            if (!sym_lut[i + j * FONT_WIDTH]) continue;
+            unsigned lx  = x_pos + i;
+            unsigned fpx = ly;
+            unsigned fpy = SDL_DINGUX_FB_HEIGHT - 1 - lx;
+            if (fpx < SDL_DINGUX_FB_WIDTH && fpy < SDL_DINGUX_FB_HEIGHT)
+               fb[fpy * fb_stride + fpx] = col;
          }
       }
       x_pos += FONT_WIDTH_STRIDE;
@@ -501,12 +410,10 @@ static void sdl_dingux_blit_video_mode_error_msg(sdl_dingux_video_t *vid)
 /* ==========================================================================
  * Init / Free
  * ========================================================================== */
-
 static void sdl_dingux_gfx_free(void *data)
 {
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
    if (!vid) return;
-
 #if defined(DINGUX_BETA)
    dingux_ipu_reset();
 #else
@@ -515,13 +422,8 @@ static void sdl_dingux_gfx_free(void *data)
    if (vid->filter_type != DINGUX_IPU_FILTER_BICUBIC)
       dingux_ipu_set_filter_type(DINGUX_IPU_FILTER_BICUBIC);
 #endif
-
-   if (vid->osd_font)
-      bitmapfont_free_lut(vid->osd_font);
-
-   if (vid->last_frame_buf)
-      free(vid->last_frame_buf);
-
+   if (vid->osd_font)      bitmapfont_free_lut(vid->osd_font);
+   if (vid->last_frame_buf) free(vid->last_frame_buf);
    free(vid);
 }
 
@@ -532,7 +434,6 @@ static void sdl_dingux_input_driver_init(
    if (!input || !input_data) return;
    *input = NULL; *input_data = NULL;
    if (string_is_empty(input_drv_name)) return;
-
    if (string_is_equal(input_drv_name, "sdl_dingux"))
    {
       *input_data = input_driver_init_wrap(&input_sdl_dingux, joypad_drv_name);
@@ -568,24 +469,24 @@ static void sdl_dingux_input_driver_init(
 static void *sdl_dingux_gfx_init(const video_info_t *video,
       input_driver_t **input, void **input_data)
 {
-   sdl_dingux_video_t *vid              = NULL;
-   uint32_t sdl_subsystem_flags         = SDL_WasInit(0);
-   settings_t *settings                 = config_get_ptr();
-   bool ipu_keep_aspect                 = settings->bools.video_dingux_ipu_keep_aspect;
-   bool ipu_integer_scaling             = settings->bools.video_scale_integer;
-   enum dingux_ipu_filter_type ipu_ft   = (enum dingux_ipu_filter_type)
+   sdl_dingux_video_t *vid            = NULL;
+   uint32_t sdl_subsystem_flags       = SDL_WasInit(0);
+   settings_t *settings               = config_get_ptr();
+   bool ipu_keep_aspect               = settings->bools.video_dingux_ipu_keep_aspect;
+   bool ipu_integer_scaling           = settings->bools.video_scale_integer;
+   enum dingux_ipu_filter_type ipu_ft = (enum dingux_ipu_filter_type)
          settings->uints.video_dingux_ipu_filter_type;
-   const char *input_drv_name           = settings->arrays.input_driver;
-   const char *joypad_drv_name          = settings->arrays.input_joypad_driver;
-   uint32_t surface_flags               = video->vsync ?
+   const char *input_drv_name         = settings->arrays.input_driver;
+   const char *joypad_drv_name        = settings->arrays.input_joypad_driver;
+   uint32_t surface_flags             = video->vsync ?
          (SDL_HWSURFACE | SDL_TRIPLEBUF | SDL_FULLSCREEN) :
          (SDL_HWSURFACE | SDL_FULLSCREEN);
 #if defined(DINGUX_BETA)
-   enum dingux_refresh_rate cur_rr      = DINGUX_REFRESH_RATE_60HZ;
-   enum dingux_refresh_rate tgt_rr      = (enum dingux_refresh_rate)
+   enum dingux_refresh_rate cur_rr    = DINGUX_REFRESH_RATE_60HZ;
+   enum dingux_refresh_rate tgt_rr    = (enum dingux_refresh_rate)
          settings->uints.video_dingux_refresh_rate;
-   bool rr_valid                        = false;
-   float hw_rr                          = 0.0f;
+   bool rr_valid                      = false;
+   float hw_rr                        = 0.0f;
 #endif
 
    if (sdl_subsystem_flags == 0)
@@ -606,12 +507,8 @@ static void *sdl_dingux_gfx_init(const video_info_t *video,
       hw_rr = dingux_set_video_refresh_rate(tgt_rr);
    else
       hw_rr = (cur_rr == DINGUX_REFRESH_RATE_50HZ) ? 50.0f : 60.0f;
-
    if (hw_rr == 0.0f)
-   {
-      RARCH_ERR("[SDL1]: Failed to set video refresh rate\n");
-      goto error;
-   }
+   { RARCH_ERR("[SDL1]: Failed to set video refresh rate\n"); goto error; }
    vid->refresh_rate      = tgt_rr;
    vid->ff_frame_time_min = (tgt_rr == DINGUX_REFRESH_RATE_50HZ) ? 20000 : 16667;
    driver_ctl(RARCH_DRIVER_CTL_SET_REFRESH_RATE, &hw_rr);
@@ -619,20 +516,14 @@ static void *sdl_dingux_gfx_init(const video_info_t *video,
    vid->ff_frame_time_min = 16667;
 #endif
 
-   vid->screen = SDL_SetVideoMode(
-         SDL_DINGUX_FB_WIDTH,
-         SDL_DINGUX_FB_HEIGHT,
-         16,
-         surface_flags);
-
+   vid->screen = SDL_SetVideoMode(SDL_DINGUX_FB_WIDTH, SDL_DINGUX_FB_HEIGHT,
+         16, surface_flags);
    if (!vid->screen)
    {
-      RARCH_ERR("[SDL1]: Failed to init SDL surface %dx%d: %s\n",
-                SDL_DINGUX_FB_WIDTH, SDL_DINGUX_FB_HEIGHT, SDL_GetError());
+      RARCH_ERR("[SDL1]: Failed to init SDL surface: %s\n", SDL_GetError());
       goto error;
    }
-
-   RARCH_LOG("[SDL1]: Portrait surface %dx%d, pitch=%d (CW rotation in SW)\n",
+   RARCH_LOG("[SDL1]: Portrait surface %dx%d pitch=%d\n",
              SDL_DINGUX_FB_WIDTH, SDL_DINGUX_FB_HEIGHT, vid->screen->pitch);
 
    vid->frame_width         = SDL_DINGUX_FB_WIDTH;
@@ -654,20 +545,13 @@ static void *sdl_dingux_gfx_init(const video_info_t *video,
    vid->last_frame_height   = 0;
    vid->last_frame_pitch    = 0;
    vid->last_msg[0]         = '\0';
-   vid->last_msg_frame      = 0;
 
    SDL_ShowCursor(SDL_DISABLE);
-
    sdl_dingux_input_driver_init(input_drv_name, joypad_drv_name, input, input_data);
    sdl_dingux_init_font_color(vid);
-
    vid->osd_font = bitmapfont_get_lut();
    if (!vid->osd_font || vid->osd_font->glyph_max < (SDL_DINGUX_NUM_FONT_GLYPHS - 1))
-   {
-      RARCH_ERR("[SDL1]: Failed to init OSD font\n");
-      goto error;
-   }
-
+   { RARCH_ERR("[SDL1]: Failed to init OSD font\n"); goto error; }
    return vid;
 
 error:
@@ -678,22 +562,17 @@ error:
 /* ==========================================================================
  * Frame
  * ========================================================================== */
-
 static bool sdl_dingux_gfx_frame(void *data, const void *frame,
       unsigned width, unsigned height, uint64_t frame_count,
       unsigned pitch, const char *msg, video_frame_info_t *video_info)
 {
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
+   if (unlikely(!vid)) return true;
 
-   if (unlikely(!vid))
-      return true;
-
-   /* Fast-forward throttle */
    if (unlikely(video_info->input_driver_nonblock_state))
    {
       retro_time_t now = cpu_features_get_time_usec();
-      if ((now - vid->last_frame_time) < vid->ff_frame_time_min)
-         return true;
+      if ((now - vid->last_frame_time) < vid->ff_frame_time_min) return true;
       vid->last_frame_time = now;
    }
 
@@ -701,18 +580,16 @@ static bool sdl_dingux_gfx_frame(void *data, const void *frame,
    menu_driver_frame(video_info->menu_is_alive, video_info);
 #endif
 
-   /* Cache du dernier frame non-NULL */
+   /* Cache dernier frame jeu */
    if (frame && !vid->menu_active)
    {
       size_t needed = (size_t)height * pitch;
-
       if (vid->last_frame_buf_size < needed)
       {
          free(vid->last_frame_buf);
          vid->last_frame_buf      = (uint16_t*)malloc(needed);
          vid->last_frame_buf_size = vid->last_frame_buf ? needed : 0;
       }
-
       if (vid->last_frame_buf)
       {
          memcpy(vid->last_frame_buf, frame, needed);
@@ -722,40 +599,20 @@ static bool sdl_dingux_gfx_frame(void *data, const void *frame,
       }
    }
 
-   /* Anti-flickering OSD :
-    * RetroArch envoie le msg FPS à chaque frame → le texte est redessiné
-    * sur fond noir ce qui fait clignoter. On garde le dernier msg affiché
-    * pendant OSD_HOLD_FRAMES frames avant de le réafficher. */
-#define OSD_HOLD_FRAMES 4
-
-   /* Met à jour le cache du message */
+   /* Cache OSD — ne jamais effacer last_msg.
+    * RetroArch envoie msg=NULL sur frames dupliquées → on garde le dernier. */
    if (msg && msg[0])
-   {
-      if (strncmp(msg, vid->last_msg, sizeof(vid->last_msg) - 1) != 0)
-      {
-         /* Nouveau message : on le mémorise et on reset le compteur */
-         strncpy(vid->last_msg, msg, sizeof(vid->last_msg) - 1);
-         vid->last_msg[sizeof(vid->last_msg) - 1] = '\0';
-         vid->last_msg_frame = frame_count;
-      }
-   }
-   else
-   {
-      vid->last_msg[0]    = '\0';
-      vid->last_msg_frame = 0;
-   }
+      strncpy(vid->last_msg, msg, sizeof(vid->last_msg) - 1);
 
-   if (SDL_MUSTLOCK(vid->screen))
-      SDL_LockSurface(vid->screen);
+   if (SDL_MUSTLOCK(vid->screen)) SDL_LockSurface(vid->screen);
 
    if (likely(!vid->menu_active))
    {
       vid->was_in_menu = false;
-
-      const void  *src_frame = frame ? frame : (const void*)vid->last_frame_buf;
-      unsigned     src_w     = frame ? width  : vid->last_frame_width;
-      unsigned     src_h     = frame ? height : vid->last_frame_height;
-      unsigned     src_pitch = frame ? pitch  : vid->last_frame_pitch;
+      const void *src_frame = frame ? frame : (const void*)vid->last_frame_buf;
+      unsigned    src_w     = frame ? width  : vid->last_frame_width;
+      unsigned    src_h     = frame ? height : vid->last_frame_height;
+      unsigned    src_pitch = frame ? pitch  : vid->last_frame_pitch;
 
       if (src_frame && src_w > 0 && src_h > 0)
       {
@@ -768,12 +625,14 @@ static bool sdl_dingux_gfx_frame(void *data, const void *frame,
          if (src_w != last_w || src_h != last_h ||
              vid->keep_aspect != last_ka || vid->integer_scaling != last_is)
          {
-            last_w  = src_w;  last_h  = src_h;
-            last_ka = vid->keep_aspect;
-            last_is = vid->integer_scaling;
-            RARCH_LOG("[SDL1]: Game %ux%u rgb32=%d keep_aspect=%d integer=%d\n",
-                      src_w, src_h, vid->rgb32,
-                      vid->keep_aspect, vid->integer_scaling);
+            last_w = src_w; last_h = src_h;
+            last_ka = vid->keep_aspect; last_is = vid->integer_scaling;
+            unsigned dbg_x, dbg_y, dbg_w, dbg_h;
+            sdl_dingux_compute_out_rect(src_w, src_h,
+                  vid->keep_aspect, vid->integer_scaling, &dbg_x, &dbg_y, &dbg_w, &dbg_h);
+            RARCH_LOG("[SDL1]: Game %ux%u keep=%d int=%d → out %ux%u at %u,%u\n",
+                      src_w, src_h, vid->keep_aspect, vid->integer_scaling,
+                      dbg_w, dbg_h, dbg_x, dbg_y);
          }
 
          sdl_dingux_compute_out_rect(src_w, src_h,
@@ -782,29 +641,21 @@ static bool sdl_dingux_gfx_frame(void *data, const void *frame,
 
          if (vid->rgb32)
             sdl_dingux_scale_rotate_cw_32(
-                  (const uint32_t*)src_frame,
-                  src_w, src_h, src_pitch >> 2,
-                  fb, fb_stride,
-                  out_x, out_y, out_w, out_h,
-                  vid->filter_type);
+                  (const uint32_t*)src_frame, src_w, src_h, src_pitch >> 2,
+                  fb, fb_stride, out_x, out_y, out_w, out_h, vid->filter_type);
          else
             sdl_dingux_scale_rotate_cw_16(
-                  (const uint16_t*)src_frame,
-                  src_w, src_h, src_pitch >> 1,
-                  fb, fb_stride,
-                  out_x, out_y, out_w, out_h,
-                  vid->filter_type);
+                  (const uint16_t*)src_frame, src_w, src_h, src_pitch >> 1,
+                  fb, fb_stride, out_x, out_y, out_w, out_h, vid->filter_type);
       }
    }
    else
    {
       vid->was_in_menu = true;
-
       if (vid->menu_texture_width > 0 && vid->menu_texture_height > 0)
       {
          uint16_t *fb        = (uint16_t*)vid->screen->pixels;
          unsigned  fb_stride = vid->screen->pitch >> 1;
-
          unsigned out_x, out_y, out_w, out_h;
          sdl_dingux_compute_out_rect(
                vid->menu_texture_width, vid->menu_texture_height,
@@ -814,39 +665,32 @@ static bool sdl_dingux_gfx_frame(void *data, const void *frame,
                vid->menu_texture,
                vid->menu_texture_width, vid->menu_texture_height,
                vid->menu_texture_width,
-               fb, fb_stride,
-               out_x, out_y, out_w, out_h,
-               vid->filter_type);
+               fb, fb_stride, out_x, out_y, out_w, out_h, vid->filter_type);
+                /* OSD menu : dessiné DANS le rect menu (toujours réécrit par le scaler)
+          * → pas de flickering triple-buffer, contrairement aux bandes noires.
+          * Coords landscape : x=bord gauche menu, y=bas du menu */
+         if (vid->last_msg[0] && vid->osd_font)
+         {
+            unsigned osd_lx = out_x + out_w - (FONT_HEIGHT + FONT_WIDTH_STRIDE);
+            unsigned osd_ly = out_y + (FONT_WIDTH_STRIDE);
+            sdl_dingux_blit_text_cw(vid, osd_ly, osd_lx, vid->last_msg);
+         }
       }
    }
 
-   /* OSD : dessine le message seulement si on est dans la fenêtre de stabilité
-    * (le message existe et n'a pas changé depuis OSD_HOLD_FRAMES frames).
-    * Cela évite le flickering causé par le rafraîchissement très fréquent. */
-   if (vid->last_msg[0] && vid->osd_font)
-   {
-      /* On dessine uniquement si le message est "stable" (pas tout juste arrivé)
-       * OU si c'est un message non-FPS (messages d'erreur, etc.) */
-      bool is_fps_msg = (vid->last_msg[0] >= '0' && vid->last_msg[0] <= '9');
-
-      if (!is_fps_msg || (frame_count - vid->last_msg_frame) >= OSD_HOLD_FRAMES)
-         sdl_dingux_blit_text_cw(vid, FONT_WIDTH_STRIDE,
-               SDL_DINGUX_MENU_HEIGHT - (FONT_HEIGHT + FONT_WIDTH_STRIDE),
-               vid->last_msg);
-   }
-
-   if (SDL_MUSTLOCK(vid->screen))
-      SDL_UnlockSurface(vid->screen);
-
+   /* OSD jeu : bas-gauche paysage logique, hors menu */
+   if (!vid->menu_active && vid->last_msg[0] && vid->osd_font)
+      sdl_dingux_blit_text_cw(vid, FONT_WIDTH_STRIDE,
+            SDL_DINGUX_MENU_HEIGHT - (FONT_HEIGHT + FONT_WIDTH_STRIDE),
+            vid->last_msg);
+   if (SDL_MUSTLOCK(vid->screen)) SDL_UnlockSurface(vid->screen);
    SDL_Flip(vid->screen);
-
    return true;
 }
 
 /* ==========================================================================
  * State changes
  * ========================================================================== */
-
 static void sdl_dingux_set_texture_enable(void *data, bool state, bool full_screen)
 {
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
@@ -870,16 +714,12 @@ static void sdl_dingux_gfx_set_nonblock_state(void *data, bool toggle,
       bool adaptive_vsync_enabled, unsigned swap_interval)
 {
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
-   bool vsync              = !toggle;
+   bool vsync = !toggle;
    uint32_t sf;
-
    if (!vid || vid->vsync == vsync) return;
-
    vid->vsync = vsync;
-   sf = vsync ?
-         (SDL_HWSURFACE | SDL_TRIPLEBUF | SDL_FULLSCREEN) :
-         (SDL_HWSURFACE | SDL_FULLSCREEN);
-
+   sf = vsync ? (SDL_HWSURFACE | SDL_TRIPLEBUF | SDL_FULLSCREEN)
+              : (SDL_HWSURFACE | SDL_FULLSCREEN);
    SDL_SetVideoMode(SDL_DINGUX_FB_WIDTH, SDL_DINGUX_FB_HEIGHT - 2, 16, sf);
    vid->screen = SDL_SetVideoMode(SDL_DINGUX_FB_WIDTH, SDL_DINGUX_FB_HEIGHT, 16, sf);
 }
@@ -889,14 +729,12 @@ static void sdl_dingux_apply_state_changes(void *data)
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
    settings_t *settings    = config_get_ptr();
    bool ka, is;
-
    if (!vid || !settings) return;
-
    ka = settings->bools.video_dingux_ipu_keep_aspect;
    is = settings->bools.video_scale_integer;
-
    if (vid->keep_aspect != ka || vid->integer_scaling != is)
    {
+      RARCH_LOG("[SDL1]: State change: keep_aspect=%d integer_scaling=%d\n", ka, is);
       dingux_ipu_set_scaling_mode(ka, is);
       vid->keep_aspect     = ka;
       vid->integer_scaling = is;
@@ -908,15 +746,9 @@ static void sdl_dingux_set_filtering(void *data, unsigned index, bool smooth, bo
    sdl_dingux_video_t *vid = (sdl_dingux_video_t*)data;
    settings_t *settings    = config_get_ptr();
    enum dingux_ipu_filter_type ft;
-
    if (!vid || !settings) return;
-
    ft = (enum dingux_ipu_filter_type)settings->uints.video_dingux_ipu_filter_type;
-   if (vid->filter_type != ft)
-   {
-      dingux_ipu_set_filter_type(ft);
-      vid->filter_type = ft;
-   }
+   if (vid->filter_type != ft) { dingux_ipu_set_filter_type(ft); vid->filter_type = ft; }
 }
 
 static void sdl_dingux_gfx_check_window(sdl_dingux_video_t *vid)
@@ -939,11 +771,11 @@ static bool sdl_dingux_gfx_alive(void *data)
    return !vid->quitting;
 }
 
-static bool sdl_dingux_gfx_focus(void *data)                     { return true; }
-static bool sdl_dingux_gfx_suppress_screensaver(void *d, bool e)  { return false; }
-static bool sdl_dingux_gfx_has_windowed(void *data)               { return false; }
+static bool sdl_dingux_gfx_focus(void *data)                    { return true; }
+static bool sdl_dingux_gfx_suppress_screensaver(void *d, bool e) { return false; }
+static bool sdl_dingux_gfx_has_windowed(void *data)              { return false; }
 static bool sdl_dingux_gfx_set_shader(void *d,
-      enum rarch_shader_type t, const char *p)                    { return false; }
+      enum rarch_shader_type t, const char *p)                   { return false; }
 
 static void sdl_dingux_gfx_viewport_info(void *data, struct video_viewport *vp)
 {
@@ -978,9 +810,7 @@ static const video_poke_interface_t sdl_dingux_poke_interface = {
 };
 
 static void sdl_dingux_get_poke_interface(void *data, const video_poke_interface_t **iface)
-{
-   *iface = &sdl_dingux_poke_interface;
-}
+{ *iface = &sdl_dingux_poke_interface; }
 
 video_driver_t video_sdl_dingux = {
    sdl_dingux_gfx_init,
