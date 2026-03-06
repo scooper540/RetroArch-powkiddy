@@ -1632,7 +1632,9 @@ else ifeq ($(HAVE_SDL_DINGUX), 1)
    DEF_FLAGS += $(SDL_DINGUX_CFLAGS)
    LIBS += $(SDL_DINGUX_LIBS)
 endif
-
+ifeq ($(POWKIDDY), 1)
+   OBJ += gfx/drivers/sdl_powkiddy_gfx.o
+endif
 ifeq ($(HAVE_SDL_COMMON), 1)
    OBJ += input/drivers/sdl_input.o \
           input/drivers_joypad/sdl_joypad.o \

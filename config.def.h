@@ -479,7 +479,7 @@
 #define DEFAULT_ASPECT_RATIO_IDX ASPECT_RATIO_CORE
 #endif
 
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
 /* Enables aspect ratio correction (1:1 PAR) when
  * using the IPU hardware scaler in Dingux devices */
 #define DEFAULT_DINGUX_IPU_KEEP_ASPECT true

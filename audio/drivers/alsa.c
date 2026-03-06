@@ -107,10 +107,10 @@ static void audio_dsp_init(void *data, unsigned sample_rate)
     alsa->norm_peak = 0.0f;
     
     fprintf(stderr,"Audio DSP initialized:\n");
-    fprintf(stderr,"  High-pass: %.0f Hz (alpha=%.4f)\n", HIGHPASS_FREQ, alsa->hp_alpha);
-    fprintf(stderr,"  Low-pass: %.0f Hz (alpha=%.4f)\n", LOWPASS_FREQ, alsa->lp_alpha);
-    fprintf(stderr,"  Compressor: %.1f:1 ratio, threshold=%.0f%%\n", COMP_RATIO, COMP_THRESHOLD * 100);
-    fprintf(stderr,"  Normalizer: target=%.0f%%\n", NORM_TARGET * 100);
+    fprintf(stderr,"  Activate %d High-pass: %.0f Hz (alpha=%.4f)\n", ENABLE_HIGHPASS, HIGHPASS_FREQ, alsa->hp_alpha);
+    fprintf(stderr,"  Activate %d Low-pass: %.0f Hz (alpha=%.4f)\n", ENABLE_LOWPASS, LOWPASS_FREQ, alsa->lp_alpha);
+    fprintf(stderr,"  Activate %d Compressor: %.1f:1 ratio, threshold=%.0f%%\n", ENABLE_COMPRESSOR, COMP_RATIO, COMP_THRESHOLD * 100);
+    fprintf(stderr,"  Activate %d Normalizer: target=%.0f%%\n", ENABLE_NORMALIZER, NORM_TARGET * 100);
 }
 
 /* Soft clipping (tanh approximation for speed) */

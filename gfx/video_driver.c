@@ -335,6 +335,9 @@ const video_driver_t *video_drivers[] = {
    &video_sdl_dingux,
 #endif
 #endif
+#ifdef POWKIDDY
+   &video_sdl_powkiddy,
+#endif
 #ifdef HAVE_XVIDEO
    &video_xvideo,
 #endif

@@ -1,0 +1,219 @@
+#########################
+## Toolchain variables ##
+#########################
+
+# Alpha toolchain
+
+# All toolchain-related variables may be
+# overridden via the command line
+
+
+#########################
+#########################
+
+PACKAGE_NAME = retroarch
+
+DEBUG ?= 0
+
+
+POWKIDDY = 1
+HAVE_IMAGEVIEWER = 1
+HAVE_FFMPEG = 0
+HAVE_SDL = 1
+
+RS90 = 0
+DINGUX = 0
+DINGUX_BETA = 0
+
+HAVE_SCREENSHOTS = 0
+HAVE_REWIND = 0
+HAVE_7ZIP = 1
+HAVE_AL = 0
+HAVE_ALSA = 1
+HAVE_DSP_FILTER = 1
+HAVE_VIDEO_FILTER = 1
+HAVE_STATIC_VIDEO_FILTERS = 1
+HAVE_STATIC_AUDIO_FILTERS = 1
+HAVE_FILTERS_BUILTIN	= 1
+HAVE_BUILTINMBEDTLS = 0
+HAVE_BUILTINZLIB = 1
+HAVE_C99 = 1
+HAVE_CC = 1
+HAVE_CC_RESAMPLER = 1
+
+HAVE_CHD = 1
+HAVE_COMMAND = 1
+HAVE_CXX = 1
+HAVE_DR_MP3 = 1
+HAVE_DYNAMIC = 1
+HAVE_EGL = 0
+HAVE_FREETYPE = 1
+HAVE_GDI = 0
+HAVE_GETADDRINFO = 0
+HAVE_GETOPT_LONG = 1
+HAVE_GLSL = 0
+HAVE_HID = 0
+HAVE_IBXM = 0
+HAVE_IMAGEVIEWER = 0
+HAVE_LANGEXTRA = 1
+HAVE_LIBRETRODB = 1
+HAVE_MENU = 1
+HAVE_MENU_COMMON = 1
+HAVE_GFX_WIDGETS = 1
+HAVE_MMAP = 0
+HAVE_OPENDINGUX_FBDEV = 0
+HAVE_OPENGL = 0
+HAVE_OPENGL1 = 0
+HAVE_OPENGLES = 0
+HAVE_OPENGLES3 = 0
+HAVE_OPENGL_CORE = 0
+HAVE_OPENSSL = 0
+HAVE_OVERLAY = 1
+HAVE_RBMP = 1
+HAVE_RJPEG = 1
+HAVE_RPILED = 0
+HAVE_RPNG = 1
+HAVE_RUNAHEAD = 0
+HAVE_SDL_DINGUX = 0
+HAVE_SHADERPIPELINE = 0
+HAVE_STB_FONT = 1
+HAVE_STB_IMAGE = 1
+HAVE_STB_VORBIS = 0
+HAVE_STDIN_CMD = 1
+HAVE_STRCASESTR = 1
+HAVE_THREADS = 1
+HAVE_UDEV = 0
+HAVE_RGUI = 1
+HAVE_MATERIALUI = 0
+HAVE_XMB = 0
+HAVE_OZONE = 0
+HAVE_ZLIB = 1
+HAVE_CONFIGFILE = 1
+HAVE_PATCH = 1
+HAVE_CHEATS = 1
+HAVE_CHEEVOS = 0
+HAVE_LIBSHAKE = 0
+HAVE_TINYALSA = 1
+HAVE_NEAREST_RESAMPLER = 1
+HAVE_CORE_INFO_CACHE = 1
+
+OS = Linux
+TARGET = retroarch
+
+OBJ :=
+LINK := $(CXX)
+#DEF_FLAGS := -mplt -mno-shared
+#DEF_FLAGS += -ffunction-sections -fdata-sections
+#DEF_FLAGS += -I. -Ideps -Ideps/stb -DPOWKIDDY=1 -MMD
+#DEF_FLAGS += -Wall -Wno-unused-variable
+#DEF_FLAGS += -std=gnu99 -D_GNU_SOURCE -lasound $(CXXFLAGS) 
+DEF_FLAGS := $(CXXFLAGS) -DPOWKIDDY=1 -DHAVE_SDL=1 -D_GNU_SOURCE -lasound
+LIBS := -ldl -lz -lrt -pthread
+#CFLAGS :=
+CXXFLAGS := -fno-exceptions -fno-rtti -std=c++11 -D__STDC_CONSTANT_MACROS
+#ASFLAGS :=
+LDFLAGS := $(LD_FLAGS)
+INCLUDE_DIRS = -I$(INC_DIR)
+LIBRARY_DIRS = -L$(LIB_DIR)
+DEFINES := -DRARCH_INTERNAL -D_FILE_OFFSET_BITS=64 -UHAVE_STATIC_DUMMY
+DEFINES += -DHAVE_C99=1 -DHAVE_CXX=1
+DEFINES += -DHAVE_GETOPT_LONG=1 -DHAVE_STRCASESTR=1 -DHAVE_DYNAMIC=1
+DEFINES += -DHAVE_FILTERS_BUILTIN
+DEFINES += -DHAVE_ALSA
+DEFINES += -DCC_RESAMPLER_PRECISION=0
+
+SDL_CFLAGS := $(shell $(SDL_CONFIG) --cflags)
+SDL_LIBS := $(shell $(SDL_CONFIG) --libs)
+FREETYPE_CFLAGS := $(shell $(FREETYPE_CONFIG) --cflags)
+FREETYPE_LIBS := $(shell $(FREETYPE_CONFIG) --libs)
+# libswscale libavutil libavdevice libavformat libavcodec libavfilter libswresample
+
+#AVCODEC_LIBS := $(shell $(PKG_CONFIG) libavcodec --libs)
+#AVFORMAT_LIBS := $(shell $(PKG_CONFIG) libavformat --libs)
+#AVUTIL_LIBS := $(shell $(PKG_CONFIG) libavutil --libs)
+#SWSCALE_LIBS := $(shell $(PKG_CONFIG) libswscale --libs)
+#SWRESAMPLE_LIBS := $(shell $(PKG_CONFIG) libswresample --libs)
+#
+#AVCODEC_CFLAGS := $(shell $(PKG_CONFIG) libavcodec --cflags)
+#AVFORMAT_CFLAGS := $(shell $(PKG_CONFIG) libavformat --cflags)
+#AVUTIL_CFLAGS := $(shell $(PKG_CONFIG) libavutil --cflags)
+#SWSCALE_CFLAGS := $(shell $(PKG_CONFIG) libswscale --cflags)
+#SWRESAMPLE_CFLAGS := $(shell $(PKG_CONFIG) libswresample --cflags)
+
+#MMAP_LIBS = -lc
+
+OBJDIR_BASE := obj-unix
+
+ifeq ($(DEBUG), 1)
+   OBJDIR := $(OBJDIR_BASE)/debug
+   DEF_FLAGS += -O0 -g -DDEBUG -D_DEBUG
+else
+   OBJDIR := $(OBJDIR_BASE)/release
+   DEF_FLAGS += -Ofast -DNDEBUG
+endif
+
+include Makefile.common
+
+DEF_FLAGS += $(INCLUDE_DIRS) $(FREETYPE_CFLAGS) $(SDL_CFLAGS)
+LDFLAGS += $(CFLAGS) $(CXXFLAGS) $(DEF_FLAGS) $(SDL_LIBS) $(FREETYPE_LIBS)
+CFLAGS += $(DEF_FLAGS)
+CXXFLAGS += $(DEF_FLAGS)
+
+HEADERS = $(wildcard */*/*.h) $(wildcard */*.h) $(wildcard *.h)
+
+Q := @
+
+RARCH_OBJ := $(addprefix $(OBJDIR)/,$(OBJ))
+
+define DESKTOP_ENTRY
+[Desktop Entry]
+Name=RetroArch
+Comment=Frontend for emulators, game engines
+Exec=retroarch
+Terminal=false
+Type=Application
+StartupNotify=true
+Icon=retroarch
+Categories=emulators;
+endef
+export DESKTOP_ENTRY
+
+all: $(TARGET)
+
+-include $(RARCH_OBJ:.o=.d)
+
+SYMBOL_MAP := -Wl,-Map=output.map
+
+$(TARGET): $(RARCH_OBJ)
+	@$(if $(Q), $(shell echo echo LD $@),)
+	$(Q)$(LINK) -o $@ $(RARCH_OBJ) $(LIBS) $(LDFLAGS) $(LIBRARY_DIRS)
+
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@$(if $(Q), $(shell echo echo CC $<),)
+	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) $(DEFINES) -c -o $@ $<
+
+$(OBJDIR)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	@$(if $(Q), $(shell echo echo CXX $<),)
+	$(Q)$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DEFINES) -MMD -c -o $@ $<
+
+$(OBJDIR)/%.o: %.m
+	@mkdir -p $(dir $@)
+	@$(if $(Q), $(shell echo echo OBJC $<),)
+	$(Q)$(CXX) $(OBJCFLAGS) $(DEFINES) -MMD -c -o $@ $<
+
+$(OBJDIR)/%.o: %.S $(HEADERS)
+	@mkdir -p $(dir $@)
+	@$(if $(Q), $(shell echo echo AS $<),)
+	$(Q)$(CC) $(CFLAGS) $(ASFLAGS) $(DEFINES) -c -o $@ $<
+
+clean:
+	rm -rf $(OBJDIR_BASE)
+	rm -f $(TARGET)
+	rm -f *.d
+	rm -rf $(OPK_NAME)
+
+
+print-%:
+	@echo '$*=$($*)'

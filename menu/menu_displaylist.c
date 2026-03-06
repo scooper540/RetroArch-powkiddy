@@ -8675,9 +8675,10 @@ unsigned menu_displaylist_build_list(
          break;
       case DISPLAYLIST_VIDEO_SCALING_SETTINGS_LIST:
          {
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
             if (string_is_equal(settings->arrays.video_driver, "sdl_dingux") ||
-                string_is_equal(settings->arrays.video_driver, "sdl_rs90"))
+                string_is_equal(settings->arrays.video_driver, "sdl_rs90") ||
+                string_is_equal(settings->arrays.video_driver, "sdl_powkiddy"))
             {
                if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
                         MENU_ENUM_LABEL_VIDEO_SCALE_INTEGER,

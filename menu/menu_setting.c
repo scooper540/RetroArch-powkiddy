@@ -11657,7 +11657,6 @@ static bool setting_append_list(
                (*list)[list_info->index - 1].action_ok     = &setting_action_ok_uint_special;
                menu_settings_list_current_add_range(list, list_info, 0, 4320, 8, true, true);
             }
-
 #if defined(DINGUX) && defined(DINGUX_BETA)
             if (string_is_equal(settings->arrays.video_driver, "sdl_dingux") ||
                 string_is_equal(settings->arrays.video_driver, "sdl_rs90"))
@@ -11953,9 +11952,10 @@ static bool setting_append_list(
                   CMD_EVENT_VIDEO_APPLY_STATE_CHANGES);
             SETTINGS_DATA_LIST_CURRENT_ADD_FLAGS(list, list_info, SD_FLAG_LAKKA_ADVANCED);
 
-#if defined(DINGUX)
+#if defined(DINGUX) || defined (POWKIDDY)
             if (string_is_equal(settings->arrays.video_driver, "sdl_dingux") ||
-                string_is_equal(settings->arrays.video_driver, "sdl_rs90"))
+                string_is_equal(settings->arrays.video_driver, "sdl_rs90") ||
+                string_is_equal(settings->arrays.video_driver, "sdl_powkiddy"))
             {
                CONFIG_BOOL(
                      list, list_info,

@@ -1380,7 +1380,8 @@ static bool rgui_set_pixel_format_function(void)
             string_is_equal(driver_ident, "d3d12"))
       argb32_to_pixel_platform_format = argb32_to_bgra4444;
    else if (string_is_equal(driver_ident, "sdl_dingux") ||    /* DINGUX SDL */
-            string_is_equal(driver_ident, "sdl_rs90"))
+            string_is_equal(driver_ident, "sdl_rs90")||    /* DINGUX SDL */
+            string_is_equal(driver_ident, "sdl_powkiddy"))
    {
       argb32_to_pixel_platform_format = argb32_to_rgb565;
       return false; /* Transparency not supported */
@@ -6563,7 +6564,7 @@ static void rgui_set_texture(void *data)
    unsigned fb_width, fb_height;
    settings_t            *settings = config_get_ptr();
    gfx_display_t          *p_disp  = disp_get_ptr();
-#if defined(DINGUX)
+#if (defined(DINGUX) || defined(POWKIDDY))
    unsigned internal_upscale_level = RGUI_UPSCALE_NONE;
 #else
    unsigned internal_upscale_level = settings->uints.menu_rgui_internal_upscale_level;

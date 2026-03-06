@@ -3524,7 +3524,7 @@ MSG_HASH(
    MENU_ENUM_LABEL_VIDEO_ASPECT_RATIO_INDEX,
    "aspect_ratio_index"
    )
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
 MSG_HASH(
    MENU_ENUM_LABEL_VIDEO_DINGUX_IPU_KEEP_ASPECT,
    "video_dingux_ipu_keep_aspect"

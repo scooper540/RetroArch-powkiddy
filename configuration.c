@@ -79,6 +79,7 @@ enum video_driver_enum
    VIDEO_SDL2,
    VIDEO_SDL_DINGUX,
    VIDEO_SDL_RS90,
+   VIDEO_SDL_POWKIDDY,
    VIDEO_EXT,
    VIDEO_WII,
    VIDEO_WIIU,
@@ -440,6 +441,8 @@ static const enum video_driver_enum VIDEO_DEFAULT_DRIVER = VIDEO_SDL_RS90;
 #else
 static const enum video_driver_enum VIDEO_DEFAULT_DRIVER = VIDEO_SDL_DINGUX;
 #endif
+#elif defined(POWKIDDY)
+static const enum video_driver_enum VIDEO_DEFAULT_DRIVER = VIDEO_SDL_POWKIDDY;
 #elif defined(_WIN32) && !defined(_XBOX)
 static const enum video_driver_enum VIDEO_DEFAULT_DRIVER = VIDEO_GDI;
 #elif defined(DJGPP)
@@ -534,7 +537,7 @@ static const enum record_driver_enum RECORD_DEFAULT_DRIVER = RECORD_NULL;
 
 #ifdef HAVE_WINMM
 static const enum midi_driver_enum MIDI_DEFAULT_DRIVER = MIDI_WINMM;
-#elif defined(HAVE_ALSA) && !defined(HAVE_HAKCHI) && !defined(HAVE_SEGAM) && !defined(DINGUX)
+#elif defined(HAVE_ALSA) && !defined(HAVE_HAKCHI) && !defined(HAVE_SEGAM) && !defined(DINGUX) && !defined(POWKIDDY)
 static const enum midi_driver_enum MIDI_DEFAULT_DRIVER = MIDI_ALSA;
 #else
 static const enum midi_driver_enum MIDI_DEFAULT_DRIVER = MIDI_NULL;
@@ -682,7 +685,7 @@ static const enum location_driver_enum LOCATION_DEFAULT_DRIVER = LOCATION_ANDROI
 static const enum location_driver_enum LOCATION_DEFAULT_DRIVER = LOCATION_NULL;
 #endif
 
-#if (defined(_3DS) || defined(DINGUX)) && defined(HAVE_RGUI)
+#if (defined(_3DS) || defined(DINGUX) || defined(POWKIDDY)) && defined(HAVE_RGUI)
 static const enum menu_driver_enum MENU_DEFAULT_DRIVER = MENU_RGUI;
 #elif defined(HAVE_MATERIALUI) && defined(RARCH_MOBILE)
 static const enum menu_driver_enum MENU_DEFAULT_DRIVER = MENU_MATERIALUI;
@@ -1003,6 +1006,8 @@ const char *config_get_default_video(void)
          return "sdl_dingux";
       case VIDEO_SDL_RS90:
          return "sdl_rs90";
+      case VIDEO_SDL_POWKIDDY:
+         return "sdl_powkiddy";
       case VIDEO_SDL:
          return "sdl";
       case VIDEO_SDL2:
@@ -1702,9 +1707,10 @@ static struct config_bool_setting *populate_settings_bool(
    SETTING_BOOL("video_ctx_scaling",             &settings->bools.video_ctx_scaling, true, DEFAULT_VIDEO_CTX_SCALING, false);
    SETTING_BOOL("video_force_aspect",            &settings->bools.video_force_aspect, true, DEFAULT_FORCE_ASPECT, false);
    SETTING_BOOL("video_frame_delay_auto",        &settings->bools.video_frame_delay_auto, true, DEFAULT_FRAME_DELAY_AUTO, false);
-#if defined(DINGUX)
+#if (defined(DINGUX) || defined(POWKIDDY))
    SETTING_BOOL("video_dingux_ipu_keep_aspect",  &settings->bools.video_dingux_ipu_keep_aspect, true, DEFAULT_DINGUX_IPU_KEEP_ASPECT, false);
 #endif
+
    SETTING_BOOL("video_threaded",                video_driver_get_threaded(), true, DEFAULT_VIDEO_THREADED, false);
    SETTING_BOOL("video_shared_context",          &settings->bools.video_shared_context, true, DEFAULT_VIDEO_SHARED_CONTEXT, false);
    SETTING_BOOL("auto_screenshot_filename",      &settings->bools.auto_screenshot_filename, true, DEFAULT_AUTO_SCREENSHOT_FILENAME, false);
@@ -1896,7 +1902,9 @@ static struct config_bool_setting *populate_settings_bool(
 
    SETTING_BOOL("menu_show_help",                &settings->bools.menu_show_help, true, DEFAULT_MENU_SHOW_HELP, false);
    SETTING_BOOL("menu_show_quit_retroarch",      &settings->bools.menu_show_quit_retroarch, true, DEFAULT_MENU_SHOW_QUIT, false);
+#ifndef POWKIDDY   
    SETTING_BOOL("menu_show_restart_retroarch",   &settings->bools.menu_show_restart_retroarch, true, DEFAULT_MENU_SHOW_RESTART, false);
+#endif
    SETTING_BOOL("menu_show_reboot",              &settings->bools.menu_show_reboot, true, DEFAULT_MENU_SHOW_REBOOT, false);
    SETTING_BOOL("menu_show_shutdown",            &settings->bools.menu_show_shutdown, true, DEFAULT_MENU_SHOW_SHUTDOWN, false);
    SETTING_BOOL("menu_show_online_updater",      &settings->bools.menu_show_online_updater, true, DEFAULT_MENU_SHOW_ONLINE_UPDATER, false);

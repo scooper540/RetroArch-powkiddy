@@ -1535,7 +1535,7 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_SMOOTH,
    "Add a slight blur to the image to soften hard pixel edges. This option has very little impact on performance."
    )
-#if defined(DINGUX)
+#if (defined(DINGUX) || defined(POWKIDDY))
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_DINGUX_IPU_FILTER_TYPE,
    "Image Interpolation"
@@ -1946,7 +1946,7 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_ASPECT_RATIO,
    "Floating point value for video aspect ratio (width / height)."
    )
-#if defined(DINGUX)
+#if (defined(DINGUX) || defined(POWKIDDY))
 MSG_HASH(
    MENU_ENUM_LABEL_VALUE_VIDEO_DINGUX_IPU_KEEP_ASPECT,
    "Keep Aspect Ratio"
