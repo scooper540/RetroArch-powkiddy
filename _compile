@@ -1,12 +1,4 @@
 Retroarch
-edit sdl lib path (not taken into account during configure)
-nano $SYSROOT/usr/local/lib/pkgconfig/sdl.pc
-and set the prefix dir of your sysroot
-
-./configure --prefix=$SYSROOT --host=arm-buildroot-linux-uclibcgnueabi --enable-sdl --disable-sdl2 --disable-networking --disable-opengl --disable-mali_fbdev --disable-x11 --disable-wayland --enable-alsa --enable-tinyalsa --disable-audioio --disable-oss --disable-rsound --disable-roar --disable-pulse --disable-coreaudio --enable-neon --enable-floathard --disable-vulkan --disable-wifi --disable-ozone --disable-debug --enable-sdl_dingux
-
-edit config.mk and add under prefix line:
-DINGUX = 1
-
+make -f Makefile.powkiddy
 make -j2
 make install DESTDIR=$SYSROOT 
