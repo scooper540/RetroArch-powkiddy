@@ -1186,7 +1186,7 @@ static enum frontend_powerstate frontend_unix_get_powerstate(
 
    /* 'Time left' reporting is unsupported */
    *seconds = -1;
-#elif defined(DINGUX)
+#elif defined(DINGUX) 
    /* Dingux seems to have limited battery
     * reporting capability - if we get a valid
     * integer here, just assume that state is
@@ -1768,7 +1768,7 @@ static void frontend_unix_get_env(int *argc,
    else
       fill_pathname_join(g_defaults.dirs[DEFAULT_DIR_CORE], base_path,
             "cores", sizeof(g_defaults.dirs[DEFAULT_DIR_CORE]));
-#if defined(DINGUX)
+#if (defined(DINGUX) || defined(POWKIDDY))
    /* On platforms that require manual core installation/
     * removal, placing core info files in the same directory
     * as the cores themselves makes file management highly
@@ -2370,7 +2370,7 @@ static void frontend_unix_exitspawn(char *s, size_t len, char *args)
 
 static uint64_t frontend_unix_get_total_mem(void)
 {
-#if defined(DINGUX)
+#if (defined(DINGUX) || defined(POWKIDDY))
    char line[256];
    unsigned long mem_total = 0;
    FILE* meminfo_file      = NULL;

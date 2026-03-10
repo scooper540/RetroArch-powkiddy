@@ -224,9 +224,9 @@ static void sdl_powkiddy_compute_out_rect(
       if(!vid->keep_aspect)
       {  
          ow = dst_w;
-         oh = (rotated_h > 0) ? (rotated_w * dst_h / rotated_h) : dst_h;
-         if (oh < 1)   oh = 1;
-         if(oh > dst_h) oh = dst_h;
+         oh = (rotated_w > 0) ? (rotated_h * dst_w / rotated_w) : dst_h;
+         if (oh < 1)    oh = 1;
+		 if (oh > dst_h) oh = dst_h;
       }
       else
       {

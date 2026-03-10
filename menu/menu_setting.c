@@ -12306,6 +12306,7 @@ static bool setting_append_list(
 #endif
             else
 #endif
+#if !defined(POWKIDDY)
             {
                CONFIG_BOOL(
                      list, list_info,
@@ -12324,7 +12325,7 @@ static bool setting_append_list(
                      );
                MENU_SETTINGS_LIST_CURRENT_ADD_CMD(list, list_info, CMD_EVENT_REINIT);
             }
-
+#endif
 #ifdef HAVE_ODROIDGO2
             CONFIG_BOOL(
                   list, list_info,
