@@ -183,7 +183,7 @@ MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_SYNCHRONIZATION_SETTINGS,
    "Change video synchronisation settings."
    )
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
 MSG_HASH(
    MENU_ENUM_SUBLABEL_VIDEO_DINGUX_IPU_FILTER_TYPE,
    "Specify image interpolation method when scaling content with the internal IPU. 'Bi-cubic' or 'Bilinear' is recommended when using CPU-powered video filters. This option has no performance impact."
