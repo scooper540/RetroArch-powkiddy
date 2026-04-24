@@ -5343,7 +5343,7 @@ static void setting_get_string_representation_uint_video_3ds_display_mode(
 }
 #endif
 
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
 static void setting_get_string_representation_uint_video_dingux_ipu_filter_type(
       rarch_setting_t *setting,
       char *s, size_t len)
@@ -5371,6 +5371,19 @@ static void setting_get_string_representation_uint_video_dingux_ipu_filter_type(
                   MENU_ENUM_LABEL_VALUE_VIDEO_DINGUX_IPU_FILTER_NEAREST),
                len);
          break;
+      case DINGUX_IPU_FILTER_SOFTWARE_NEAREST:
+         strcpy(s, "Software Nearest");
+         break;
+      case DINGUX_IPU_FILTER_CATMULL_ROM:
+         strcpy(s, "Catmull-Rom");
+         break;
+      case DINGUX_IPU_FILTER_LANCZOS:
+         strcpy(s, "Lanczos");
+         break;
+      case DINGUX_IPU_FILTER_SHARP_BILINEAR:
+         strcpy(s, "Sharp Bilinear");
+         break;
+      
    }
 }
 
@@ -12262,7 +12275,24 @@ static bool setting_append_list(
                   general_read_handler);
             menu_settings_list_current_add_range(list, list_info, 0, 24, 1, true, true);
 #endif
-
+#if defined(POWKIDDY)
+            CONFIG_UINT(
+                     list, list_info,
+                     &settings->uints.video_dingux_ipu_filter_type,
+                     MENU_ENUM_LABEL_VIDEO_DINGUX_IPU_FILTER_TYPE,
+                     MENU_ENUM_LABEL_VALUE_VIDEO_DINGUX_IPU_FILTER_TYPE,
+                     DEFAULT_DINGUX_IPU_FILTER_TYPE,
+                     &group_info,
+                     &subgroup_info,
+                     parent_group,
+                     general_write_handler,
+                     general_read_handler);
+               (*list)[list_info->index - 1].action_ok = &setting_action_ok_uint;
+               (*list)[list_info->index - 1].get_string_representation =
+                     &setting_get_string_representation_uint_video_dingux_ipu_filter_type;
+               menu_settings_list_current_add_range(list, list_info, 0, DINGUX_IPU_FILTER_LAST - 1, 1, true, true);
+               (*list)[list_info->index - 1].ui_type   = ST_UI_TYPE_UINT_COMBOBOX;
+#endif
 #if defined(DINGUX)
             if (string_is_equal(settings->arrays.video_driver, "sdl_dingux"))
             {

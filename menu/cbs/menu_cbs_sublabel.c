@@ -1076,6 +1076,7 @@ DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_aspect_ratio,                 
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_aspect_ratio_index,              MENU_ENUM_SUBLABEL_VIDEO_ASPECT_RATIO_INDEX)
 #if defined(POWKIDDY)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_dingux_ipu_keep_aspect,          MENU_ENUM_SUBLABEL_VIDEO_DINGUX_IPU_KEEP_ASPECT)
+DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_dingux_ipu_filter_type,          MENU_ENUM_SUBLABEL_VIDEO_DINGUX_IPU_FILTER_TYPE)
 #endif
 #if defined(DINGUX)
 DEFAULT_SUBLABEL_MACRO(action_bind_sublabel_video_dingux_ipu_keep_aspect,          MENU_ENUM_SUBLABEL_VIDEO_DINGUX_IPU_KEEP_ASPECT)
@@ -2379,6 +2380,9 @@ int menu_cbs_init_bind_sublabel(menu_file_list_cbs_t *cbs,
 #if defined(POWKIDDY)
          case MENU_ENUM_LABEL_VIDEO_DINGUX_IPU_KEEP_ASPECT:
             BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_video_dingux_ipu_keep_aspect);
+            break;
+         case MENU_ENUM_LABEL_VIDEO_DINGUX_IPU_FILTER_TYPE:
+            BIND_ACTION_SUBLABEL(cbs, action_bind_sublabel_video_dingux_ipu_filter_type);
             break;
 #endif
 #if defined(DINGUX) 

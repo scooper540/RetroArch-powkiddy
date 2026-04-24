@@ -6686,7 +6686,7 @@ unsigned menu_displaylist_build_list(
                      MENU_ENUM_LABEL_VIDEO_CTX_SCALING,
                      PARSE_ONLY_BOOL, false) == 0)
                count++;
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
             if (MENU_DISPLAYLIST_PARSE_SETTINGS_ENUM(list,
                      MENU_ENUM_LABEL_VIDEO_DINGUX_IPU_FILTER_TYPE,
                      PARSE_ONLY_UINT, false) == 0)

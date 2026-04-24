@@ -2366,7 +2366,7 @@ static struct config_uint_setting *populate_settings_uint(
 #ifdef _3DS
    SETTING_UINT("video_3ds_display_mode",       &settings->uints.video_3ds_display_mode, true, DEFAULT_VIDEO_3DS_DISPLAY_MODE, false);
 #endif
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
    SETTING_UINT("video_dingux_ipu_filter_type", &settings->uints.video_dingux_ipu_filter_type, true, DEFAULT_DINGUX_IPU_FILTER_TYPE, false);
 #if defined(DINGUX_BETA)
    SETTING_UINT("video_dingux_refresh_rate",    &settings->uints.video_dingux_refresh_rate, true, DEFAULT_DINGUX_REFRESH_RATE, false);

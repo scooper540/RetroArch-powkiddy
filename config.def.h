@@ -42,7 +42,20 @@
 #if defined(DINGUX)
 #include "dingux/dingux_utils.h"
 #endif
-
+#if defined(POWKIDDY)
+//define the filters
+enum dingux_ipu_filter_type
+{
+   DINGUX_IPU_FILTER_BICUBIC = 0,
+   DINGUX_IPU_FILTER_BILINEAR,
+   DINGUX_IPU_FILTER_NEAREST,
+   DINGUX_IPU_FILTER_SOFTWARE_NEAREST,
+   DINGUX_IPU_FILTER_CATMULL_ROM,
+   DINGUX_IPU_FILTER_SHARP_BILINEAR,
+   DINGUX_IPU_FILTER_LANCZOS,
+   DINGUX_IPU_FILTER_LAST
+};
+#endif
 /* Required for 'show inputs on overlay' setting */
 #if defined(HAVE_OVERLAY)
 #include "../input/input_overlay.h"
@@ -479,7 +492,12 @@
 #define DEFAULT_ASPECT_RATIO_IDX ASPECT_RATIO_CORE
 #endif
 
-#if defined(DINGUX) || defined(POWKIDDY)
+#if defined(POWKIDDY)
+#define DEFAULT_DINGUX_IPU_KEEP_ASPECT true
+#define DEFAULT_DINGUX_IPU_FILTER_TYPE DINGUX_IPU_FILTER_NEAREST
+#endif
+
+#if defined(DINGUX)
 /* Enables aspect ratio correction (1:1 PAR) when
  * using the IPU hardware scaler in Dingux devices */
 #define DEFAULT_DINGUX_IPU_KEEP_ASPECT true
@@ -1441,7 +1459,7 @@
 #define DEFAULT_INPUT_DESCRIPTOR_LABEL_SHOW true
 #define DEFAULT_INPUT_DESCRIPTOR_HIDE_UNBOUND false
 
-#if defined(DINGUX)
+#if defined(DINGUX) || defined(POWKIDDY)
 #define DEFAULT_INPUT_MAX_USERS 1
 #else
 #define DEFAULT_INPUT_MAX_USERS 5
