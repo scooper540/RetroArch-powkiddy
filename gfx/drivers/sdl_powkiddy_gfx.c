@@ -376,60 +376,37 @@ static void de_set_filter(de_powkiddy_video_t *vid)
  * integer_scaling && keep_aspect: max scaling rounded to integer (x2,x3,x4)
  * !integer_scaling && !keep_aspect: full screen stretch
  * ========================================================================== */
-static void sdl_powkiddy_compute_out_rect(
-      de_powkiddy_video_t *vid,
-      unsigned src_w, unsigned src_h,
+static void powkiddy_compute_out_rect(
+      unsigned dst_w, unsigned dst_h,
+      unsigned rotated_w, unsigned rotated_h,
+      bool integer_scaling, bool keep_aspect,
       unsigned *out_x, unsigned *out_y,
       unsigned *out_w, unsigned *out_h)
 {
-   unsigned rotated_w, rotated_h;
-   unsigned dst_w = vid->fb_width;
-   unsigned dst_h = vid->fb_height;
    unsigned ow, oh;
 
-   /* Swap axes for 90°/270° rotations */
-   if (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+   if (integer_scaling && !keep_aspect)
    {
-      rotated_w = src_h;
-      rotated_h = src_w;
-   }
-   else
-   {
-      rotated_w = src_w;
-      rotated_h = src_h;
-   }
-
-   if (vid->integer_scaling)
-   {
-      /* Fill full physical width, height by exact ratio.
-       * Maximizes the screen height in landscape view.
-       *
-       * ROT_90 examples (X39 Pro 480x854):
-       *   GB  160x144 -> rot 144x160 : ow=480, oh=144*854/160=768
-       *   NES 256x240 -> rot 240x256 : ow=480, oh=240*854/256=800
-       *   GBA 240x160 -> rot 160x240 : ow=480, oh=160*854/240=569
-       *
-       * ROT_0 examples (landscape 640x480):
-       *   NES 256x240 : ow=640, oh=256*480/240=512
-       */
-      if(!vid->keep_aspect)
-      {  
+      float ratio = (float)rotated_w / (float)rotated_h;
+      ow = (unsigned)(ratio * dst_h + 0.5f);
+      oh = dst_h;
+      if (ow > dst_w) {
          ow = dst_w;
-         oh = (rotated_w > 0) ? (rotated_h * dst_w / rotated_w) : dst_h;
-         if (oh < 1)    oh = 1;
-		 if (oh > dst_h) oh = dst_h;
+         oh = (unsigned)(dst_w / ratio + 0.5f);
       }
-      else
-      {
-         unsigned sx = dst_w / rotated_w;
-         unsigned sy = dst_h / rotated_h;
-         unsigned s  = (sx < sy) ? sx : sy;
-         if (s < 1) s = 1;
-         ow = rotated_w * s;
-         oh = rotated_h * s;
-      }
+      if (ow < 1) ow = 1;
+      if (oh < 1) oh = 1;
    }
-   else if (vid->keep_aspect)
+   else if (integer_scaling && keep_aspect)
+   {
+      unsigned sx = dst_w / rotated_w;
+      unsigned sy = dst_h / rotated_h;
+      unsigned s  = (sx < sy) ? sx : sy;
+      if (s < 1) s = 1;
+      ow = rotated_w * s;
+      oh = rotated_h * s;
+   }
+   else if (keep_aspect)
    {
       ow = (rotated_w < dst_w) ? rotated_w : dst_w;
       oh = (rotated_h < dst_h) ? rotated_h : dst_h;
@@ -444,6 +421,37 @@ static void sdl_powkiddy_compute_out_rect(
    *out_y = (dst_h - oh) / 2;
    *out_w = ow;
    *out_h = oh;
+}
+ static void sdl_powkiddy_compute_out_rect(
+      de_powkiddy_video_t *vid,
+      unsigned src_w, unsigned src_h,
+      unsigned *out_x, unsigned *out_y,
+      unsigned *out_w, unsigned *out_h)
+{
+   unsigned rotated_w, rotated_h;
+   if (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+      { rotated_w = src_h; rotated_h = src_w; }
+   else
+      { rotated_w = src_w; rotated_h = src_h; }
+
+   powkiddy_compute_out_rect(
+         vid->fb_width, vid->fb_height,
+         rotated_w, rotated_h,
+         vid->integer_scaling, vid->keep_aspect,
+         out_x, out_y, out_w, out_h);
+}
+
+static void de_powkiddy_compute_out_rect(
+      de_powkiddy_video_t *vid,
+      unsigned rotated_w, unsigned rotated_h,
+      unsigned *out_x, unsigned *out_y,
+      unsigned *out_w, unsigned *out_h)
+{
+   powkiddy_compute_out_rect(
+         vid->lcd_w, vid->lcd_h,
+         rotated_w, rotated_h,
+         vid->integer_scaling, vid->keep_aspect,
+         out_x, out_y, out_w, out_h);
 }
 
 static void scale_nearest_16(
@@ -575,7 +583,7 @@ static void scale_nearest_32to16(
 
    switch (vid->rotation)
    {
-      case ROT_90:
+      case ROT_270:
       {
          unsigned sx_lut[DE_POWKIDDY_MAX_FB_H];
          unsigned step = ((unsigned long long)src_w << 16) / out_h;
@@ -604,7 +612,7 @@ static void scale_nearest_32to16(
          break;
       }
 
-      case ROT_270:
+      case ROT_90:
       {
          unsigned sx_lut[DE_POWKIDDY_MAX_FB_H];
          unsigned step = ((unsigned long long)src_w << 16) / out_h;
@@ -666,52 +674,6 @@ static void scale_nearest_32to16(
    }
 }
 
-static void de_powkiddy_compute_out_rect(
-      de_powkiddy_video_t *vid,
-      unsigned rotated_w, unsigned rotated_h,
-      unsigned *out_x, unsigned *out_y,
-      unsigned *out_w, unsigned *out_h)
-{
-   unsigned dst_w = vid->lcd_w;
-   unsigned dst_h = vid->lcd_h;
-   unsigned ow, oh;
-
-   if (vid->integer_scaling && !vid->keep_aspect)
-   {
-      /* Remplit la largeur physique exactement, hauteur par ratio */
-      ow = dst_w;
-      oh = (rotated_w > 0) ? (rotated_h * dst_w / rotated_w) : dst_h;
-      if (oh < 1)    oh = 1;
-      if (oh > dst_h) oh = dst_h;
-   }
-   else if (vid->integer_scaling && vid->keep_aspect)
-   {
-      /* Scale entier max, ratio conservé */
-      unsigned sx = dst_w / rotated_w;
-      unsigned sy = dst_h / rotated_h;
-      unsigned s  = (sx < sy) ? sx : sy;
-      if (s < 1) s = 1;
-      ow = rotated_w * s;
-      oh = rotated_h * s;
-   }
-   else if (vid->keep_aspect)
-   {
-      /* 1:1 pixel, centré (pas de scale) */
-      ow = (rotated_w < dst_w) ? rotated_w : dst_w;
-      oh = (rotated_h < dst_h) ? rotated_h : dst_h;
-   }
-   else
-   {
-      /* Étirement plein écran */
-      ow = dst_w;
-      oh = dst_h;
-   }
-
-   *out_x = (dst_w - ow) / 2;
-   *out_y = (dst_h - oh) / 2;
-   *out_w = ow;
-   *out_h = oh;
-}
 /* ==========================================================================
  * Nearest-neighbor scaler — 16bpp, all rotations
  * ========================================================================== */
@@ -1467,7 +1429,8 @@ static bool de_powkiddy_gfx_frame(void *data, const void *frame,
 
    if (msg && msg[0])
       strncpy(vid->last_msg, msg, sizeof(vid->last_msg) - 1);
-
+   else
+      vid->last_msg[0] = '\0';
    if (!vid->buf_virt) return true;
 
    //detect changes
@@ -1519,10 +1482,22 @@ static bool de_powkiddy_gfx_frame(void *data, const void *frame,
                      fb, fb_stride, out_x, out_y, out_w, out_h);
 
             /* OSD — bottom-left in logical landscape space */
+            
             if (!vid->menu_active && vid->last_msg[0] && vid->osd_font)
-               de_powkiddy_blit_text(vid, FONT_WIDTH_STRIDE,
-                     vid->menu_h - (FONT_HEIGHT + FONT_WIDTH_STRIDE),
+            {
+             /* Dans l'espace logique source, la frame scalée fait out_w x out_h dans le FB.
+               * En ROT_270 : axe X logique = out_h FB, axe Y logique = out_w FB */
+               unsigned logical_frame_h = (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+                                       ? out_w : out_h;
+               unsigned logical_x_off   = (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+                                       ? out_y : out_x;
+               unsigned logical_y_off   = (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+                                       ? out_x : out_y;
+               de_powkiddy_blit_text(vid,
+                     logical_x_off + FONT_WIDTH_STRIDE,
+                     logical_y_off + logical_frame_h - (FONT_HEIGHT + FONT_WIDTH_STRIDE),
                      vid->last_msg);
+            }
          }
          else
          { //use DE
@@ -1585,9 +1560,16 @@ static bool de_powkiddy_gfx_frame(void *data, const void *frame,
                   fb, fb_stride, out_x, out_y, out_w, out_h);
             if (vid->last_msg[0] && vid->osd_font)
             {
-               unsigned osd_lx = out_x + out_w - (FONT_HEIGHT + FONT_WIDTH_STRIDE);
-               unsigned osd_ly = out_y + (FONT_WIDTH_STRIDE);
-               de_powkiddy_blit_text(vid, osd_ly, osd_lx, vid->last_msg);
+               unsigned logical_frame_h = (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+                                       ? out_w : out_h;
+               unsigned logical_x_off   = (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+                                       ? out_y : out_x;
+               unsigned logical_y_off   = (vid->rotation == ROT_90 || vid->rotation == ROT_270)
+                                       ? out_x : out_y;
+               de_powkiddy_blit_text(vid,
+                     logical_x_off + FONT_WIDTH_STRIDE,
+                     logical_y_off + logical_frame_h - (FONT_HEIGHT + FONT_WIDTH_STRIDE),
+                     vid->last_msg);
             }
          }
          else
